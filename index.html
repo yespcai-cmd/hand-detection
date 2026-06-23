@@ -310,7 +310,7 @@ ${issues.map(i => "・" + i).join("\n")}
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "llama3-8b-8192",
+      model: "openai/gpt-oss-20b",
       messages: [
         { role: "system", content: "You are a helpful typing posture coach. Always respond in Japanese." },
         { role: "user",   content: prompt },
