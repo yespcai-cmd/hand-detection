@@ -1,284 +1,560 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Typing AI Prototype</title>
-<style>
-  body { margin: 0; background: #111; color: #fff; font-family: sans-serif; }
-  #canvas { display: block; margin: 0 auto; cursor: crosshair; }
-  #info { padding: 10px; text-align: center; font-size: 0.95rem; line-height: 1.8; }
-  #status { color: #ffd600; font-weight: bold; }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Typing Posture AI Prototype</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px; }
+    #canvas { display: block; cursor: crosshair; border: 1px solid #333; border-radius: 8px; max-width: 100%; }
+    #canvas.calibrating { border-color: #ffd600; box-shadow: 0 0 0 2px #ffd60055; }
+    #info { text-align: center; font-size: 0.9rem; line-height: 1.8; }
+    #status { color: #ffd600; font-weight: bold; }
+    #controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 7px 16px; border-radius: 7px; border: 1px solid #444; background: #222; color: #fff; cursor: pointer; font-size: 0.88rem; }
+    button:hover { background: #333; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    #advice {
+      width: 100%; max-width: 660px;
+      padding: 12px 16px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      min-height: 48px;
+    }
+    #api-key-wrap { display: flex; gap: 6px; align-items: center; font-size: 0.85rem; }
+    #api-key-wrap input {
+      flex: 1; padding: 5px 10px; border-radius: 6px;
+      border: 1px solid #444; background: #1e1e1e; color: #fff;
+      font-size: 0.85rem; max-width: 340px;
+    }
+  </style>
 </head>
 <body>
 
 <div id="info">
-  <p>キーボードの四隅（Q→P→Z→？）→ F → J の順にクリックしてください</p>
-  <p id="status">待機中…</p>
+  <p>① Q→P→Z→？（四隅）→ ② F → ③ J の順にクリック</p>
+  <p id="status">カメラ起動中…</p>
+</div>
+
+<div id="controls">
+  <div id="api-key-wrap">
+    <label>Groq API Key:</label>
+    <input type="password" id="apiKeyInput" placeholder="gsk_...">
+  </div>
+  <button id="genAdviceBtn" disabled>🤖 AIアドバイス生成</button>
+  <button id="resetBtn">↺ リセット</button>
 </div>
 
 <video id="cam" autoplay playsinline style="display:none;"></video>
 <canvas id="canvas"></canvas>
+<div id="advice">キャリブレーション後にAIアドバイスを生成できます。</div>
 
-<!--
-  ★ 修正① ES Module形式をやめ、<script>タグで読み込む
-     MediaPipeのCDNはUMD形式のため、import文では動作しない
--->
+<!-- ★ UMD形式で読み込む（ES Module import は使わない） -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
 <script>
-const video  = document.getElementById("cam");
-const canvas = document.getElementById("canvas");
-const ctx    = canvas.getContext("2d");
-const status = document.getElementById("status");
+// ─── DOM ─────────────────────────────────────────────────────
+const video       = document.getElementById("cam");
+const canvas      = document.getElementById("canvas");
+const ctx         = canvas.getContext("2d");
+const statusEl    = document.getElementById("status");
+const adviceBox   = document.getElementById("advice");
+const genBtn      = document.getElementById("genAdviceBtn");
+const resetBtn    = document.getElementById("resetBtn");
+const apiKeyInput = document.getElementById("apiKeyInput");
 
-// ------------------------------
-// ① Webカメラ起動
-//    ★ 修正② Camera ユーティリティを使って安定稼働
-// ------------------------------
-const camera = new Camera(video, {
-  onFrame: async () => { await hands.send({ image: video }); },
-  width: 640, height: 480
-});
+// ─── キーボードレイアウト定義 ────────────────────────────────
+//
+//  Q(左上) ─────────────── P(右上)
+//  Z(左下) ─────────────── ？(右下)
+//
+//  クリック順: Q → P → Z → ？ → F → J
+//
+const CORNER_LABELS = ["Q（左上）", "P（右上）", "Z（左下）", "？（右下）", "F", "J"];
+const CORNER_COLORS = ["#ff4d4d", "#4daaff", "#ffaa00", "#44dd88", "#ff88ff", "#88ffff"];
 
-camera.start().then(() => {
-  canvas.width  = 640;
-  canvas.height = 480;
-  status.textContent = "Q（左上）をクリック (0/4)";
-});
+// JIS配列3行。rowOffset = 物理的な段差（stagger）
+const KB_ROWS = [
+  { keys: ["Q","W","E","R","T","Y","U","I","O","P"], rowOffset: 0.00 },
+  { keys: ["A","S","D","F","G","H","J","K","L",";"], rowOffset: 0.05 },
+  { keys: ["Z","X","C","V","B","N","M",",",".","/"], rowOffset: 0.12 },
+];
+const NUM_ROWS = KB_ROWS.length;
+const MAX_COLS = Math.max(...KB_ROWS.map(r => r.keys.length));
 
-// ------------------------------
-// ② キャリブレーション状態
-// ------------------------------
+// ─── キャリブレーション状態 ──────────────────────────────────
+let clickStep       = 0;   // 0〜5（6クリックで完了）
+let corners         = [];  // [Q, P, Z, ？] の4点
+let F_pos           = null;
+let J_pos           = null;
+let keys            = [];  // 全キー座標 [{key, x, y}, ...]
+let calibDone       = false;
 
-// クリック順: Q(左上)→P(右上)→Z(左下)→？(右下)→F→J
-const CORNER_LABELS = ["Q（左上）", "P（右上）", "Z（左下）", "？（右下）"];
-
-let clickStep      = 0;
-let keyboardCorners = [];   // 四隅 [Q, P, Z, ？]
-let F_pos          = null;
-let J_pos          = null;
-let keys           = [];    // 全キー座標
-
-canvas.addEventListener("click", e => {
-  // ★ 修正③ スケール補正を追加
-  //    canvas の表示サイズ(CSS)と実ピクセルが異なる場合に座標がズレるため
+// ─── スケール補正付きクリック座標取得 ─────────────────────────
+function getCanvasXY(e) {
   const rect   = canvas.getBoundingClientRect();
   const scaleX = canvas.width  / rect.width;
   const scaleY = canvas.height / rect.height;
-  const x = (e.clientX - rect.left) * scaleX;
-  const y = (e.clientY - rect.top)  * scaleY;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top)  * scaleY,
+  };
+}
 
-  // 四隅の取得（0〜3クリック目）
+canvas.addEventListener("click", e => {
+  if (clickStep >= 6) return;
+  const { x, y } = getCanvasXY(e);
+
   if (clickStep < 4) {
-    keyboardCorners.push({ x, y });
+    // 四隅
+    corners.push({ x, y });
     clickStep++;
     if (clickStep < 4) {
-      status.textContent = `${CORNER_LABELS[clickStep]} をクリック (${clickStep}/4)`;
+      statusEl.textContent = `${CORNER_LABELS[clickStep]} をクリック (${clickStep}/4)`;
     } else {
+      // 四隅が揃ったのでキー座標を生成してからFを促す
       generateKeyPositions();
-      status.textContent = "次に F の位置をクリック";
+      statusEl.textContent = "F の位置をクリック (5/6)";
     }
     return;
   }
 
-  // F の位置（5クリック目）
-  if (!F_pos) {
+  if (clickStep === 4) {
+    // F の位置 → keys[] の F 座標を上書き
     F_pos = { x, y };
-    // F_pos でキー配列の F 座標を上書き（より正確な位置に補正）
     const fKey = keys.find(k => k.key === "F");
     if (fKey) { fKey.x = x; fKey.y = y; }
-    status.textContent = "次に J の位置をクリック";
+    clickStep++;
+    statusEl.textContent = "J の位置をクリック (6/6)";
     return;
   }
 
-  // J の位置（6クリック目）
-  if (!J_pos) {
+  if (clickStep === 5) {
+    // J の位置 → keys[] の J 座標を上書き
     J_pos = { x, y };
-    // J_pos でキー配列の J 座標を上書き（より正確な位置に補正）
     const jKey = keys.find(k => k.key === "J");
     if (jKey) { jKey.x = x; jKey.y = y; }
-    status.textContent = "✅ キャリブレーション完了 — ホームポジション判定中";
-    return;
+    clickStep++;
+    calibDone = true;
+    canvas.classList.remove("calibrating");
+    statusEl.textContent = "✅ キャリブレーション完了";
+    genBtn.disabled = false;
   }
 });
 
-// ------------------------------
-// ③ キー座標生成（QWERTY 3行）
-//    ★ 修正④ ホームポジション行だけでなく Q〜？の全3行を生成
-//             generateKeyPositions() を四隅取得後に呼ぶよう修正
-// ------------------------------
+// ─── キー座標生成（四隅から線形補間） ───────────────────────
 function generateKeyPositions() {
-  const [Q, P, Z, Hてん] = keyboardCorners; // Q=左上, P=右上, Z=左下, ？=右下
-
-  // JIS配列 3行。rowOffset は物理的な段差（stagger）
-  const KB_ROWS = [
-    { keys: ["Q","W","E","R","T","Y","U","I","O","P"], rowOffset: 0.00 },
-    { keys: ["A","S","D","F","G","H","J","K","L",";"], rowOffset: 0.05 },
-    { keys: ["Z","X","C","V","B","N","M",",",".","/"], rowOffset: 0.12 },
-  ];
-  const NUM_ROWS = KB_ROWS.length;
-  const MAX_COLS = Math.max(...KB_ROWS.map(r => r.keys.length));
-
+  const [Q, P, Z, Hq] = corners; // Q=左上, P=右上, Z=左下, ？=右下
   keys = [];
 
   KB_ROWS.forEach((row, ri) => {
-    const rowT = ri / (NUM_ROWS - 1); // 0.0〜1.0（行方向の補間比率）
+    const rowT = ri / (NUM_ROWS - 1);
 
-    // 行の左端・右端を四隅から線形補間
-    const leftX  = Q.x + (Z.x - Q.x) * rowT;
-    const leftY  = Q.y + (Z.y - Q.y) * rowT;
-    const rightX = P.x + (Hてん.x - P.x) * rowT;
-    const rightY = P.y + (Hてん.y - P.y) * rowT;
+    // 行の左端・右端を補間
+    const lx = Q.x + (Z.x - Q.x) * rowT;
+    const ly = Q.y + (Z.y - Q.y) * rowT;
+    const rx = P.x + (Hq.x - P.x) * rowT;
+    const ry = P.y + (Hq.y - P.y) * rowT;
 
     row.keys.forEach((key, ci) => {
-      const colT = (ci + row.rowOffset) / (MAX_COLS - 1); // 列方向の補間比率
-
-      const x = leftX + (rightX - leftX) * colT;
-      const y = leftY + (rightY - leftY) * colT;
-      keys.push({ key, x, y });
+      const colT = (ci + row.rowOffset) / (MAX_COLS - 1);
+      keys.push({
+        key,
+        x: lx + (rx - lx) * colT,
+        y: ly + (ry - ly) * colT,
+      });
     });
   });
 }
 
-// ------------------------------
-// ④ 指→キー対応ロジック
-// ------------------------------
-function dist(ax, ay, bx, by) {
-  return Math.hypot(ax - bx, ay - by);
+// ─── 共通ユーティリティ ──────────────────────────────────────
+function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+function vecAngleDeg(v1, v2) {
+  const dot = v1.x*v2.x + v1.y*v2.y;
+  const mag = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y);
+  if (mag === 0) return 0;
+  return Math.acos(Math.max(-1, Math.min(1, dot / mag))) * 180 / Math.PI;
 }
 
-function getNearestKey(fx, fy) {
-  let minDist = Infinity, nearest = null;
-  for (const k of keys) {
-    const d = dist(fx, fy, k.x, k.y);
-    if (d < minDist) { minDist = d; nearest = k; }
-  }
-  return nearest;
-}
+// ─── 指→ホームキー対応（片手4本、landmark先端番号） ─────────
+//
+//  MediaPipe landmark 先端番号:
+//    4=親指, 8=人差し指, 12=中指, 16=薬指, 20=小指
+//
+//  maxNumHands:2 で multiHandedness を使い左右を分離する。
+//  multiHandedness の label は「カメラから見た左右」なので
+//  ★ 実際の手と逆になる（鏡像）→ Left=右手, Right=左手 として扱う
+//
+const LEFT_FINGER_HOME  = { 8:"F", 12:"D", 16:"S", 20:"A" }; // 実際の左手
+const RIGHT_FINGER_HOME = { 8:"J", 12:"K", 16:"L", 20:";" }; // 実際の右手
 
-// ★ 修正⑤ 指番号の左右を修正
-//
-//  MediaPipe の landmark 番号と担当キーの正しい対応:
-//
-//    landmark番号  指         ホームキー
-//    ───────────────────────────────────
-//       8         左手人差し指   F
-//      12         左手中指       D   ← 元コードは逆（8→F, 12→D が正しい）
-//      16         左手薬指       S
-//      20         左手小指       A
-//      ────────────────────────────────
-//       7         右手人差し指   J   ← 元コードは landmark 7 を右手としていたが
-//      11         右手中指       K      MediaPipe は片手しか取らない場合、
-//      15         右手薬指       L      左手として返すことが多いため
-//      19         右手小指       ;      実際は同じ手の別の指になる
-//
-//  ※ maxNumHands:1 の場合、検出される手は1本のみ。
-//     両手を同時に判定したい場合は maxNumHands:2 に変更し、
-//     multiHandedness で左右を判別する必要がある。
-//     今回は「左手のみ」の4本指ホームポジション判定とする。
-//
-const fingerToHome = {
-  8:  "F",   // 人差し指先端
-  12: "D",   // 中指先端
-  16: "S",   // 薬指先端
-  20: "A",   // 小指先端
-};
-
-// ホームポジション判定（指先がキー座標から threshold px 以内かどうか）
-const THRESHOLD = 40; // px
+const HOME_THRESHOLD = 40; // px
 
 function isOnHome(fx, fy, keyName) {
-  // ★ 修正⑥ F_pos/J_pos を使わず keys[] の座標で判定
-  //    元コードは F_pos/J_pos を取得したのに isOnHome() では keys[] を使っており、
-  //    F_pos/J_pos が実際の判定に反映されていなかった。
-  //    → F_pos/J_pos は generateKeyPositions() 後に keys[] を上書きしているため、
-  //       keys[] を参照すれば常に最新の正確な座標が得られる。
   const k = keys.find(k => k.key === keyName);
   if (!k) return false;
-  return dist(fx, fy, k.x, k.y) < THRESHOLD;
+  return dist(fx, fy, k.x, k.y) < HOME_THRESHOLD;
 }
 
-// ------------------------------
-// ⑤ キー座標をCanvasに描画（デバッグ用）
-// ------------------------------
+// ─── 手首角度計算 ────────────────────────────────────────────
+//
+//  landmark を使った背屈/掌屈・橈屈/尺屈の近似:
+//    v_long = 手首(0) → 中指MCP(9)  … 手の長手方向
+//    v_flex = 手首(0) → 中指先端(12) … 屈曲方向
+//    v_side = 手首(0) → 人差し指MCP(5) … 橈屈方向
+//
+//  ※ z座標はMediaPipeの正規化相対深度（手の大きさで正規化済み）。
+//     カメラ距離や個人差で絶対値の意味が変わるため「浮かせ判定」には
+//     左右の相対差の参考値として使う。
+//
+function calcWristAngles(lm, side) {
+  const w  = lm[0],  m9 = lm[9],  m12 = lm[12], i5 = lm[5];
+
+  const vLong = { x: m9.x  - w.x, y: m9.y  - w.y };
+  const vFlex = { x: m12.x - w.x, y: m12.y - w.y };
+  const vSide = { x: i5.x  - w.x, y: i5.y  - w.y };
+
+  const upDown = vecAngleDeg(vLong, vFlex);
+  const lateral = vecAngleDeg(vLong, vSide);
+
+  // 背屈か掌屈かの判定（y軸: 画面下が正）
+  const upDownType = (m12.y < m9.y) ? "背屈（反り）" : "掌屈（曲げ）";
+
+  // 橈屈/尺屈: 左手と右手でi5の向きが逆になるため side で分岐
+  let sideType;
+  if (side === "left") {
+    sideType = (i5.x > m9.x) ? "橈屈（外側）" : "尺屈（内側）";
+  } else {
+    sideType = (i5.x < m9.x) ? "橈屈（外側）" : "尺屈（内側）";
+  }
+
+  return { upDown, upDownType, lateral, sideType, wristZ: w.z };
+}
+
+// ─── 移動距離・統計 ──────────────────────────────────────────
+let prevPosL = {}, prevPosR = {};
+// landmark先端インデックス（親指除く）
+const TIP_INDICES = [8, 12, 16, 20];
+let moveDistL = Object.fromEntries(TIP_INDICES.map(i => [i, 0]));
+let moveDistR = Object.fromEntries(TIP_INDICES.map(i => [i, 0]));
+
+let homeTotal = 0, homeCorrect = 0;
+
+let latestMetrics = {
+  homeRate: 0,
+  leftAngles: null,
+  rightAngles: null,
+  moveDistL,
+  moveDistR,
+};
+
+// ─── スコア計算 ──────────────────────────────────────────────
+function wristScore(deg)  { return deg < 15 ? 25 : deg < 30 ? 15 : deg < 45 ? 5 : 0; }
+function lateralScore(deg){ return deg < 10 ? 15 : deg < 20 ?  8 : deg < 30 ? 3 : 0; }
+function moveScore(px)    { return px < 500 ? 10 : px < 1000 ? 7 : px < 2000 ? 3 : 0; }
+
+function calcTotalScore(homeRate, lA, rA, mdL, mdR) {
+  const homeS = homeRate * 40;
+  let wristS = 0, sideS = 0, balanceS = 0, floatS = 0, moveS = 0;
+
+  if (lA && rA) {
+    wristS   = (wristScore(lA.upDown)   + wristScore(rA.upDown))   / 2;
+    sideS    = (lateralScore(lA.lateral) + lateralScore(rA.lateral));
+    const diff = Math.abs(lA.upDown - rA.upDown);
+    balanceS = diff < 5 ? 5 : diff < 10 ? 3 : diff < 20 ? 1 : 0;
+    // z差の浮かせ判定（参考値）
+    const zDiff = Math.abs(lA.wristZ - rA.wristZ);
+    floatS = zDiff < 0.03 ? 5 : zDiff < 0.07 ? 3 : 0;
+  }
+
+  const totalMove = TIP_INDICES.reduce((s, i) => s + (mdL[i]||0) + (mdR[i]||0), 0);
+  moveS = moveScore(totalMove);
+
+  return Math.min(100, Math.round(homeS + wristS + sideS + balanceS + floatS + moveS));
+}
+
+// ─── Groq API でアドバイス生成 ───────────────────────────────
+async function generateAdvice(issues) {
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) return "⚠️ Groq API Keyを入力してください。";
+
+  if (issues.length === 0) {
+    return "✅ 姿勢はとても良いです！この調子で続けてください。";
+  }
+
+  const prompt =
+`あなたはタイピング姿勢の専門コーチです。
+以下の問題点に基づいて、優しく具体的な改善アドバイスを日本語で書いてください。
+
+【問題点】
+${issues.map(i => "・" + i).join("\n")}
+
+【条件】
+- 3〜5文程度
+- 専門用語を使いすぎない
+- 初心者にもわかりやすく
+- 改善の方向性を具体的に示す`;
+
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "llama3-8b-8192",
+      messages: [
+        { role: "system", content: "You are a helpful typing posture coach. Always respond in Japanese." },
+        { role: "user",   content: prompt },
+      ],
+      max_tokens: 400,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    return `⚠️ API エラー ${res.status}: ${err?.error?.message || res.statusText}`;
+  }
+
+  const data = await res.json();
+  return (data.choices?.[0]?.message?.content || "アドバイス生成に失敗しました。").trim();
+}
+
+// ─── AIアドバイスボタン ──────────────────────────────────────
+genBtn.addEventListener("click", async () => {
+  const { homeRate, leftAngles, rightAngles, moveDistL, moveDistR } = latestMetrics;
+  const issues = [];
+
+  if (homeRate < 0.7)
+    issues.push(`ホームポジション維持率が低い（${Math.round(homeRate*100)}%）`);
+
+  if (leftAngles) {
+    if (leftAngles.upDown > 30)
+      issues.push(`左手首が反りすぎ（背屈 ${leftAngles.upDown.toFixed(0)}°）`);
+    if (leftAngles.lateral > 20 && leftAngles.sideType === "尺屈（内側）")
+      issues.push("左手首が内側に曲がりすぎ（尺屈）");
+  }
+  if (rightAngles) {
+    if (rightAngles.upDown > 30)
+      issues.push(`右手首が反りすぎ（背屈 ${rightAngles.upDown.toFixed(0)}°）`);
+    if (rightAngles.lateral > 20 && rightAngles.sideType === "尺屈（内側）")
+      issues.push("右手首が内側に曲がりすぎ（尺屈）");
+  }
+
+  const totalMoveL8 = moveDistL[8] || 0;
+  if (totalMoveL8 > 2000)
+    issues.push(`左人差し指の移動距離が多すぎる（${totalMoveL8.toFixed(0)}px）`);
+  if ((moveDistL[20] || 0) < 200 && (moveDistR[20] || 0) < 200)
+    issues.push("小指がほとんど使われていない");
+
+  genBtn.disabled = true;
+  adviceBox.textContent = "🤖 AIアドバイス生成中…";
+  try {
+    adviceBox.textContent = await generateAdvice(issues);
+  } catch(e) {
+    adviceBox.textContent = `⚠️ エラー: ${e.message}`;
+  }
+  genBtn.disabled = false;
+});
+
+// ─── リセット ────────────────────────────────────────────────
+resetBtn.addEventListener("click", () => {
+  clickStep = 0; corners = []; F_pos = null; J_pos = null;
+  keys = []; calibDone = false;
+  prevPosL = {}; prevPosR = {};
+  moveDistL = Object.fromEntries(TIP_INDICES.map(i => [i, 0]));
+  moveDistR = Object.fromEntries(TIP_INDICES.map(i => [i, 0]));
+  homeTotal = 0; homeCorrect = 0;
+  latestMetrics = { homeRate:0, leftAngles:null, rightAngles:null, moveDistL, moveDistR };
+  canvas.classList.add("calibrating");
+  statusEl.textContent = "Q（左上）をクリック (0/4)";
+  adviceBox.textContent = "キャリブレーション後にAIアドバイスを生成できます。";
+  genBtn.disabled = true;
+});
+
+// ─── キー座標オーバーレイ描画 ────────────────────────────────
 function drawKeyOverlay() {
+  const homeKeys = new Set([...Object.values(LEFT_FINGER_HOME), ...Object.values(RIGHT_FINGER_HOME)]);
   for (const k of keys) {
-    // ホームポジションキーは強調表示
-    const isHome = Object.values(fingerToHome).includes(k.key);
+    const isHome = homeKeys.has(k.key);
     ctx.beginPath();
     ctx.arc(k.x, k.y, isHome ? 8 : 4, 0, Math.PI * 2);
-    ctx.fillStyle   = isHome ? "rgba(0,200,255,0.3)" : "rgba(255,255,255,0.15)";
-    ctx.strokeStyle = isHome ? "rgba(0,200,255,0.8)" : "rgba(255,255,255,0.4)";
+    ctx.fillStyle   = isHome ? "rgba(0,210,255,0.25)" : "rgba(255,255,255,0.12)";
+    ctx.strokeStyle = isHome ? "rgba(0,210,255,0.8)"  : "rgba(255,255,255,0.35)";
     ctx.lineWidth   = 1;
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = isHome ? "rgba(0,200,255,0.9)" : "rgba(255,255,255,0.6)";
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = isHome ? "rgba(0,210,255,0.9)" : "rgba(255,255,255,0.55)";
     ctx.font      = isHome ? "bold 10px monospace" : "9px monospace";
     ctx.fillText(k.key, k.x - 4, k.y + 3);
   }
 }
 
-// ------------------------------
-// ⑥ MediaPipe Hands 設定
-// ------------------------------
+// キャリブレーション中のクリック済み点を描画
+function drawCalibPoints() {
+  corners.forEach((p, i) => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = CORNER_COLORS[i]; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = CORNER_COLORS[i];
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText(["Q","P","Z","？"][i], p.x + 10, p.y - 6);
+  });
+  if (F_pos) {
+    ctx.beginPath(); ctx.arc(F_pos.x, F_pos.y, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = CORNER_COLORS[4]; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = CORNER_COLORS[4]; ctx.font = "bold 12px sans-serif";
+    ctx.fillText("F", F_pos.x + 10, F_pos.y - 6);
+  }
+  if (J_pos) {
+    ctx.beginPath(); ctx.arc(J_pos.x, J_pos.y, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = CORNER_COLORS[5]; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = CORNER_COLORS[5]; ctx.font = "bold 12px sans-serif";
+    ctx.fillText("J", J_pos.x + 10, J_pos.y - 6);
+  }
+}
+
+// ─── MediaPipe Hands ────────────────────────────────────────
 const hands = new Hands({
-  locateFile: file =>
-    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
 });
 
 hands.setOptions({
-  maxNumHands: 1,
+  maxNumHands: 2,           // 両手を検出
   modelComplexity: 1,
   minDetectionConfidence: 0.7,
-  minTrackingConfidence: 0.7
+  minTrackingConfidence: 0.7,
 });
 
 hands.onResults(results => {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-  // キャリブレーション済みならキーグリッドを表示
+  // キャリブレーション状態の描画
+  if (!calibDone) drawCalibPoints();
   if (keys.length > 0) drawKeyOverlay();
 
   if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
 
-  const landmarks = results.multiHandLandmarks[0];
+  // ★ multiHandedness.label は鏡像（カメラ視点）なので左右を反転して取得
+  //    label "Left"  → 実際は右手
+  //    label "Right" → 実際は左手
+  let leftHand  = null;  // 実際の左手
+  let rightHand = null;  // 実際の右手
+  for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+    const label = results.multiHandedness[i].label;
+    if (label === "Right") leftHand  = results.multiHandLandmarks[i];
+    else                   rightHand = results.multiHandLandmarks[i];
+  }
 
   // 骨格描画
-  drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
-    color: "#00FF00", lineWidth: 3
-  });
-  drawLandmarks(ctx, landmarks, { color: "#FF0000", radius: 4 });
+  for (const hand of results.multiHandLandmarks) {
+    drawConnectors(ctx, hand, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 2 });
+    drawLandmarks(ctx, hand, { color: "#FF0000", radius: 3 });
+  }
 
-  // ホームポジション判定（F・J 両方取得済みのとき）
-  if (F_pos && J_pos) {
-    let y = 30;
-    for (const [fingerIndex, homeKey] of Object.entries(fingerToHome)) {
-      const lm = landmarks[Number(fingerIndex)];
+  ctx.font = "bold 15px monospace";
+
+  // ─ 左手ホームポジション判定 ─
+  if (leftHand && calibDone) {
+    homeTotal++;
+    let correct = 0;
+    const total = Object.keys(LEFT_FINGER_HOME).length;
+
+    let ty = 30;
+    for (const [fi, homeKey] of Object.entries(LEFT_FINGER_HOME)) {
+      const lm = leftHand[Number(fi)];
       const fx = lm.x * canvas.width;
       const fy = lm.y * canvas.height;
+      const ok = isOnHome(fx, fy, homeKey);
+      if (ok) correct++;
 
+      // 移動距離
+      if (prevPosL[fi]) moveDistL[fi] += dist(fx, fy, prevPosL[fi].x, prevPosL[fi].y);
+      prevPosL[fi] = { x: fx, y: fy };
+
+      ctx.fillStyle = ok ? "cyan" : "yellow";
+      ctx.fillText(`左 ${homeKey}: ${ok ? "✅" : "❌"}`, 10, ty);
+      ty += 20;
+    }
+    homeCorrect += correct / total;
+  }
+
+  // ─ 右手ホームポジション判定 ─
+  if (rightHand && calibDone) {
+    let ty = 30;
+    for (const [fi, homeKey] of Object.entries(RIGHT_FINGER_HOME)) {
+      const lm = rightHand[Number(fi)];
+      const fx = lm.x * canvas.width;
+      const fy = lm.y * canvas.height;
       const ok = isOnHome(fx, fy, homeKey);
 
-      // 指先の色を変える（OK=シアン / NG=黄）
-      ctx.beginPath();
-      ctx.arc(fx, fy, 8, 0, Math.PI * 2);
-      ctx.fillStyle = ok ? "rgba(0,255,255,0.5)" : "rgba(255,200,0,0.5)";
-      ctx.fill();
+      if (prevPosR[fi]) moveDistR[fi] += dist(fx, fy, prevPosR[fi].x, prevPosR[fi].y);
+      prevPosR[fi] = { x: fx, y: fy };
 
-      // 左上テキスト
       ctx.fillStyle = ok ? "cyan" : "yellow";
-      ctx.font      = "bold 16px monospace";
-      ctx.fillText(`${homeKey}: ${ok ? "✅ OK" : "❌ ズレ"}`, 10, y);
-      y += 22;
+      ctx.fillText(`右 ${homeKey}: ${ok ? "✅" : "❌"}`, canvas.width - 120, ty);
+      ty += 20;
     }
   }
+
+  // ─ 手首角度 ─
+  let leftAngles  = null;
+  let rightAngles = null;
+
+  if (leftHand) {
+    leftAngles = calcWristAngles(leftHand, "left");
+    ctx.fillStyle = "cyan";
+    ctx.font = "13px sans-serif";
+    ctx.fillText(`左手首 上下: ${leftAngles.upDown.toFixed(1)}° ${leftAngles.upDownType}`,  10, canvas.height - 60);
+    ctx.fillText(`左手首 左右: ${leftAngles.lateral.toFixed(1)}° ${leftAngles.sideType}`,   10, canvas.height - 42);
+  }
+  if (rightHand) {
+    rightAngles = calcWristAngles(rightHand, "right");
+    ctx.fillStyle = "yellow";
+    ctx.font = "13px sans-serif";
+    ctx.fillText(`右手首 上下: ${rightAngles.upDown.toFixed(1)}° ${rightAngles.upDownType}`, 10, canvas.height - 24);
+    ctx.fillText(`右手首 左右: ${rightAngles.lateral.toFixed(1)}° ${rightAngles.sideType}`,  10, canvas.height - 6);
+  }
+
+  // ─ スコア ─
+  const homeRate   = homeTotal > 0 ? homeCorrect / homeTotal : 0;
+  const finalScore = calcTotalScore(homeRate, leftAngles, rightAngles, moveDistL, moveDistR);
+
+  ctx.fillStyle = "white";
+  ctx.font = "bold 14px monospace";
+  ctx.fillText(`ホーム維持率: ${(homeRate*100).toFixed(1)}%`,           10, canvas.height - 80);
+  ctx.fillText(`総合スコア: ${finalScore} / 100`,                       10, canvas.height - 98);
+  ctx.fillText(`左人差し指移動: ${(moveDistL[8]||0).toFixed(0)}px`,     10, canvas.height - 116);
+
+  latestMetrics = { homeRate, leftAngles, rightAngles, moveDistL, moveDistR };
 });
+
+// ─── カメラ起動（Camera ユーティリティで安定化） ─────────────
+const camera = new Camera(video, {
+  onFrame: async () => { await hands.send({ image: video }); },
+  width: 640,
+  height: 480,
+});
+
+camera.start()
+  .then(() => {
+    canvas.width  = 640;
+    canvas.height = 480;
+    canvas.classList.add("calibrating");
+    statusEl.textContent = "Q（左上）をクリック (0/4)";
+  })
+  .catch(err => {
+    statusEl.textContent = `⚠️ カメラエラー: ${err.message}`;
+  });
 </script>
 </body>
 </html>
