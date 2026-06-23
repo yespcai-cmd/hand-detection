@@ -1,566 +1,284 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>手の検出 – MediaPipe Hands</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      background: #0f0f0f;
-      color: #e0e0e0;
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-height: 100vh;
-      padding: 20px;
-      gap: 16px;
-    }
-
-    h1 {
-      font-size: 1.3rem;
-      font-weight: 500;
-      color: #aaa;
-      letter-spacing: 0.05em;
-    }
-
-    /* ステータスバー */
-    #status {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 8px 16px;
-      font-size: 0.9rem;
-    }
-    #status-dot {
-      width: 10px; height: 10px;
-      border-radius: 50%;
-      background: #555;
-      transition: background 0.3s;
-    }
-    #status-dot.ready   { background: #00c853; box-shadow: 0 0 6px #00c853; }
-    #status-dot.loading { background: #ffd600; box-shadow: 0 0 6px #ffd600; }
-    #status-dot.error   { background: #f44336; box-shadow: 0 0 6px #f44336; }
-
-    /* ボタン群 */
-    #controls {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    button {
-      padding: 8px 18px;
-      border-radius: 8px;
-      border: 1px solid #333;
-      background: #1e1e1e;
-      color: #e0e0e0;
-      font-size: 0.88rem;
-      cursor: pointer;
-      transition: background 0.2s, border-color 0.2s;
-    }
-    button:hover { background: #2a2a2a; border-color: #555; }
-    button.active { background: #1a3a2a; border-color: #00c853; color: #00c853; }
-    button.danger { border-color: #f44336; color: #f44336; }
-    button.danger:hover { background: #2a1a1a; }
-
-    /* canvasラッパー */
-    #canvas-wrapper {
-      position: relative;
-      border-radius: 12px;
-      overflow: hidden;
-      border: 1px solid #2a2a2a;
-      max-width: 100%;
-      cursor: crosshair;
-    }
-    /* キャリブレーションモード中は枠を強調 */
-    #canvas-wrapper.calibrating {
-      border-color: #ffd600;
-      box-shadow: 0 0 0 2px #ffd60044;
-    }
-
-    canvas { display: block; max-width: 100%; height: auto; }
-
-    /* 検出中バッジ */
-    #detect-badge {
-      position: absolute;
-      top: 12px; right: 12px;
-      background: rgba(0,200,83,0.85);
-      color: #000;
-      font-size: 0.75rem;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: 20px;
-      opacity: 0;
-      transition: opacity 0.2s;
-      pointer-events: none;
-    }
-    #detect-badge.visible { opacity: 1; }
-
-    /* キャリブレーション手順ガイド */
-    #calib-guide {
-      position: absolute;
-      top: 12px; left: 12px;
-      background: rgba(255,214,0,0.92);
-      color: #000;
-      font-size: 0.8rem;
-      font-weight: 600;
-      padding: 6px 12px;
-      border-radius: 8px;
-      display: none;
-      pointer-events: none;
-    }
-    #canvas-wrapper.calibrating #calib-guide { display: block; }
-
-    /* 情報パネル */
-    #info {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 0.82rem;
-      line-height: 1.8;
-      width: 100%;
-      max-width: 640px;
-      color: #888;
-    }
-    #info span { color: #e0e0e0; font-weight: 500; }
-
-    /* キャリブレーション座標表示 */
-    #calib-result {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 0.82rem;
-      line-height: 1.8;
-      width: 100%;
-      max-width: 640px;
-      color: #888;
-      display: none;
-    }
-    #calib-result.visible { display: block; }
-    #calib-result code {
-      display: block;
-      background: #0f0f0f;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 10px 12px;
-      font-size: 0.8rem;
-      color: #7ec8e3;
-      white-space: pre;
-      overflow-x: auto;
-      margin-top: 8px;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Typing AI Prototype</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font-family: sans-serif; }
+  #canvas { display: block; margin: 0 auto; cursor: crosshair; }
+  #info { padding: 10px; text-align: center; font-size: 0.95rem; line-height: 1.8; }
+  #status { color: #ffd600; font-weight: bold; }
+</style>
 </head>
 <body>
 
-  <h1>✋ MediaPipe Hands + キーボードキャリブレーション</h1>
+<div id="info">
+  <p>キーボードの四隅（Q→P→Z→？）→ F → J の順にクリックしてください</p>
+  <p id="status">待機中…</p>
+</div>
 
-  <div id="status">
-    <div id="status-dot" class="loading"></div>
-    <span id="status-text">カメラ起動中…</span>
-  </div>
+<video id="cam" autoplay playsinline style="display:none;"></video>
+<canvas id="canvas"></canvas>
 
-  <div id="controls">
-    <button id="btn-calib">📐 キャリブレーション開始</button>
-    <button id="btn-reset" class="danger" style="display:none;">↺ リセット</button>
-  </div>
+<!--
+  ★ 修正① ES Module形式をやめ、<script>タグで読み込む
+     MediaPipeのCDNはUMD形式のため、import文では動作しない
+-->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
-  <div id="canvas-wrapper">
-    <canvas id="canvas"></canvas>
-    <div id="detect-badge">🖐 検出中</div>
-    <div id="calib-guide">● クリック 0/4</div>
-  </div>
+<script>
+const video  = document.getElementById("cam");
+const canvas = document.getElementById("canvas");
+const ctx    = canvas.getContext("2d");
+const status = document.getElementById("status");
 
-  <div id="info">
-    人差し指先端 (landmark 8)：<span id="tip-pos">--</span><br>
-    親指先端 (landmark 4)：<span id="thumb-pos">--</span><br>
-    手首 (landmark 0)：<span id="wrist-pos">--</span>
-  </div>
+// ------------------------------
+// ① Webカメラ起動
+//    ★ 修正② Camera ユーティリティを使って安定稼働
+// ------------------------------
+const camera = new Camera(video, {
+  onFrame: async () => { await hands.send({ image: video }); },
+  width: 640, height: 480
+});
 
-  <div id="calib-result">
-    <strong>📌 キャリブレーション完了</strong>
-    <code id="calib-code"></code>
-  </div>
+camera.start().then(() => {
+  canvas.width  = 640;
+  canvas.height = 480;
+  status.textContent = "Q（左上）をクリック (0/4)";
+});
 
-  <video id="cam" autoplay playsinline style="display:none;"></video>
+// ------------------------------
+// ② キャリブレーション状態
+// ------------------------------
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+// クリック順: Q(左上)→P(右上)→Z(左下)→？(右下)→F→J
+const CORNER_LABELS = ["Q（左上）", "P（右上）", "Z（左下）", "？（右下）"];
 
-  <script>
-    // ─── DOM ──────────────────────────────────────────────────
-    const video      = document.getElementById("cam");
-    const canvas     = document.getElementById("canvas");
-    const ctx        = canvas.getContext("2d");
-    const statusDot  = document.getElementById("status-dot");
-    const statusText = document.getElementById("status-text");
-    const badge      = document.getElementById("detect-badge");
-    const tipPos     = document.getElementById("tip-pos");
-    const thumbPos   = document.getElementById("thumb-pos");
-    const wristPos   = document.getElementById("wrist-pos");
-    const wrapper    = document.getElementById("canvas-wrapper");
-    const guide      = document.getElementById("calib-guide");
-    const calibResult = document.getElementById("calib-result");
-    const calibCode  = document.getElementById("calib-code");
-    const btnCalib   = document.getElementById("btn-calib");
-    const btnReset   = document.getElementById("btn-reset");
+let clickStep      = 0;
+let keyboardCorners = [];   // 四隅 [Q, P, Z, ？]
+let F_pos          = null;
+let J_pos          = null;
+let keys           = [];    // 全キー座標
 
-    // ─── キャリブレーション状態 ──────────────────────────────
-    //
-    //  四隅のクリック順（キーボード上の実キー）:
-    //
-    //    [0]  Q  ──────── [1]  P
-    //         |                |
-    //    [2]  Z  ──────── [3]  ？
-    //
-    const CORNER_LABELS = ["Q", "P", "Z", "？"];
-    const CORNER_COLORS = ["#ff4d4d", "#4daaff", "#ffaa00", "#44dd88"];
+canvas.addEventListener("click", e => {
+  // ★ 修正③ スケール補正を追加
+  //    canvas の表示サイズ(CSS)と実ピクセルが異なる場合に座標がズレるため
+  const rect   = canvas.getBoundingClientRect();
+  const scaleX = canvas.width  / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top)  * scaleY;
 
-    let calibMode    = false;
-    let keyboardPoints = [];     // クリックした4点を格納
-    let savedPoints  = null;     // キャリブレーション確定後に保存
-
-    // キャリブレーション開始／終了
-    btnCalib.addEventListener("click", () => {
-      if (calibMode) return;
-      calibMode = true;
-      keyboardPoints = [];
-      wrapper.classList.add("calibrating");
-      btnCalib.classList.add("active");
-      btnCalib.textContent = "クリックで四隅を指定中…";
-      btnReset.style.display = "inline-block";
-      calibResult.classList.remove("visible");
-      updateGuide();
-    });
-
-    // リセット
-    btnReset.addEventListener("click", () => {
-      calibMode = false;
-      keyboardPoints = [];
-      savedPoints = null;
-      wrapper.classList.remove("calibrating");
-      btnCalib.classList.remove("active");
-      btnCalib.textContent = "📐 キャリブレーション開始";
-      btnReset.style.display = "none";
-      calibResult.classList.remove("visible");
-    });
-
-    // ガイドテキスト更新
-    function updateGuide() {
-      const n = keyboardPoints.length;
-      if (n < 4) {
-        guide.textContent = `● ${CORNER_LABELS[n]} をクリック (${n}/4)`;
-      }
+  // 四隅の取得（0〜3クリック目）
+  if (clickStep < 4) {
+    keyboardCorners.push({ x, y });
+    clickStep++;
+    if (clickStep < 4) {
+      status.textContent = `${CORNER_LABELS[clickStep]} をクリック (${clickStep}/4)`;
+    } else {
+      generateKeyPositions();
+      status.textContent = "次に F の位置をクリック";
     }
+    return;
+  }
 
-    // ─── Canvas クリックでキャリブレーション点を取得 ─────────
-    canvas.addEventListener("click", e => {
-      if (!calibMode || keyboardPoints.length >= 4) return;
+  // F の位置（5クリック目）
+  if (!F_pos) {
+    F_pos = { x, y };
+    // F_pos でキー配列の F 座標を上書き（より正確な位置に補正）
+    const fKey = keys.find(k => k.key === "F");
+    if (fKey) { fKey.x = x; fKey.y = y; }
+    status.textContent = "次に J の位置をクリック";
+    return;
+  }
 
-      // canvas の表示サイズと実ピクセルのスケール差を補正
-      const rect  = canvas.getBoundingClientRect();
-      const scaleX = canvas.width  / rect.width;
-      const scaleY = canvas.height / rect.height;
+  // J の位置（6クリック目）
+  if (!J_pos) {
+    J_pos = { x, y };
+    // J_pos でキー配列の J 座標を上書き（より正確な位置に補正）
+    const jKey = keys.find(k => k.key === "J");
+    if (jKey) { jKey.x = x; jKey.y = y; }
+    status.textContent = "✅ キャリブレーション完了 — ホームポジション判定中";
+    return;
+  }
+});
 
-      const x = Math.round((e.clientX - rect.left) * scaleX);
-      const y = Math.round((e.clientY - rect.top)  * scaleY);
+// ------------------------------
+// ③ キー座標生成（QWERTY 3行）
+//    ★ 修正④ ホームポジション行だけでなく Q〜？の全3行を生成
+//             generateKeyPositions() を四隅取得後に呼ぶよう修正
+// ------------------------------
+function generateKeyPositions() {
+  const [Q, P, Z, Hてん] = keyboardCorners; // Q=左上, P=右上, Z=左下, ？=右下
 
-      keyboardPoints.push({ x, y });
-      updateGuide();
+  // JIS配列 3行。rowOffset は物理的な段差（stagger）
+  const KB_ROWS = [
+    { keys: ["Q","W","E","R","T","Y","U","I","O","P"], rowOffset: 0.00 },
+    { keys: ["A","S","D","F","G","H","J","K","L",";"], rowOffset: 0.05 },
+    { keys: ["Z","X","C","V","B","N","M",",",".","/"], rowOffset: 0.12 },
+  ];
+  const NUM_ROWS = KB_ROWS.length;
+  const MAX_COLS = Math.max(...KB_ROWS.map(r => r.keys.length));
 
-      // 4点揃ったら確定
-      if (keyboardPoints.length === 4) {
-        savedPoints = [...keyboardPoints];
-        calibMode = false;
-        wrapper.classList.remove("calibrating");
-        btnCalib.classList.remove("active");
-        btnCalib.textContent = "✅ キャリブレーション済み";
+  keys = [];
 
-        // 結果表示
-        const formatted = JSON.stringify(savedPoints, null, 2);
-        calibCode.textContent =
-          `const keyboardPoints = ${formatted};\n\n// 使い方例:\n// isInsideKeyboard(fingerX, fingerY, keyboardPoints)`;
-        calibResult.classList.add("visible");
+  KB_ROWS.forEach((row, ri) => {
+    const rowT = ri / (NUM_ROWS - 1); // 0.0〜1.0（行方向の補間比率）
 
-        console.log("Keyboard area:", savedPoints);
-      }
+    // 行の左端・右端を四隅から線形補間
+    const leftX  = Q.x + (Z.x - Q.x) * rowT;
+    const leftY  = Q.y + (Z.y - Q.y) * rowT;
+    const rightX = P.x + (Hてん.x - P.x) * rowT;
+    const rightY = P.y + (Hてん.y - P.y) * rowT;
+
+    row.keys.forEach((key, ci) => {
+      const colT = (ci + row.rowOffset) / (MAX_COLS - 1); // 列方向の補間比率
+
+      const x = leftX + (rightX - leftX) * colT;
+      const y = leftY + (rightY - leftY) * colT;
+      keys.push({ key, x, y });
     });
+  });
+}
 
-    // ─── canvas 描画：カメラ映像 ＋ ランドマーク ＋ キャリブ点 ──
-    function drawCalibOverlay() {
-      if (keyboardPoints.length === 0 && !savedPoints) return;
+// ------------------------------
+// ④ 指→キー対応ロジック
+// ------------------------------
+function dist(ax, ay, bx, by) {
+  return Math.hypot(ax - bx, ay - by);
+}
 
-      const pts = savedPoints || keyboardPoints;
+function getNearestKey(fx, fy) {
+  let minDist = Infinity, nearest = null;
+  for (const k of keys) {
+    const d = dist(fx, fy, k.x, k.y);
+    if (d < minDist) { minDist = d; nearest = k; }
+  }
+  return nearest;
+}
 
-      // 4点を結ぶ台形を描画
-      if (pts.length === 4) {
-        ctx.beginPath();
-        // 左上→右上→右下→左下の順で結ぶ
-        ctx.moveTo(pts[0].x, pts[0].y); // 左上
-        ctx.lineTo(pts[1].x, pts[1].y); // 右上
-        ctx.lineTo(pts[3].x, pts[3].y); // 右下
-        ctx.lineTo(pts[2].x, pts[2].y); // 左下
-        ctx.closePath();
-        ctx.strokeStyle = "rgba(255,214,0,0.85)";
-        ctx.lineWidth   = 2;
-        ctx.setLineDash([6, 4]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = "rgba(255,214,0,0.08)";
-        ctx.fill();
-      }
+// ★ 修正⑤ 指番号の左右を修正
+//
+//  MediaPipe の landmark 番号と担当キーの正しい対応:
+//
+//    landmark番号  指         ホームキー
+//    ───────────────────────────────────
+//       8         左手人差し指   F
+//      12         左手中指       D   ← 元コードは逆（8→F, 12→D が正しい）
+//      16         左手薬指       S
+//      20         左手小指       A
+//      ────────────────────────────────
+//       7         右手人差し指   J   ← 元コードは landmark 7 を右手としていたが
+//      11         右手中指       K      MediaPipe は片手しか取らない場合、
+//      15         右手薬指       L      左手として返すことが多いため
+//      19         右手小指       ;      実際は同じ手の別の指になる
+//
+//  ※ maxNumHands:1 の場合、検出される手は1本のみ。
+//     両手を同時に判定したい場合は maxNumHands:2 に変更し、
+//     multiHandedness で左右を判別する必要がある。
+//     今回は「左手のみ」の4本指ホームポジション判定とする。
+//
+const fingerToHome = {
+  8:  "F",   // 人差し指先端
+  12: "D",   // 中指先端
+  16: "S",   // 薬指先端
+  20: "A",   // 小指先端
+};
 
-      // 各点にマーカーとラベル
-      pts.forEach((p, i) => {
-        const color = CORNER_COLORS[i];
+// ホームポジション判定（指先がキー座標から threshold px 以内かどうか）
+const THRESHOLD = 40; // px
 
-        // 十字マーカー
-        ctx.strokeStyle = color;
-        ctx.lineWidth   = 2;
-        ctx.beginPath();
-        ctx.moveTo(p.x - 10, p.y); ctx.lineTo(p.x + 10, p.y);
-        ctx.moveTo(p.x, p.y - 10); ctx.lineTo(p.x, p.y + 10);
-        ctx.stroke();
+function isOnHome(fx, fy, keyName) {
+  // ★ 修正⑥ F_pos/J_pos を使わず keys[] の座標で判定
+  //    元コードは F_pos/J_pos を取得したのに isOnHome() では keys[] を使っており、
+  //    F_pos/J_pos が実際の判定に反映されていなかった。
+  //    → F_pos/J_pos は generateKeyPositions() 後に keys[] を上書きしているため、
+  //       keys[] を参照すれば常に最新の正確な座標が得られる。
+  const k = keys.find(k => k.key === keyName);
+  if (!k) return false;
+  return dist(fx, fy, k.x, k.y) < THRESHOLD;
+}
 
-        // 円
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth   = 2;
-        ctx.stroke();
-        ctx.fillStyle = color + "44";
-        ctx.fill();
+// ------------------------------
+// ⑤ キー座標をCanvasに描画（デバッグ用）
+// ------------------------------
+function drawKeyOverlay() {
+  for (const k of keys) {
+    // ホームポジションキーは強調表示
+    const isHome = Object.values(fingerToHome).includes(k.key);
+    ctx.beginPath();
+    ctx.arc(k.x, k.y, isHome ? 8 : 4, 0, Math.PI * 2);
+    ctx.fillStyle   = isHome ? "rgba(0,200,255,0.3)" : "rgba(255,255,255,0.15)";
+    ctx.strokeStyle = isHome ? "rgba(0,200,255,0.8)" : "rgba(255,255,255,0.4)";
+    ctx.lineWidth   = 1;
+    ctx.fill();
+    ctx.stroke();
 
-        // ラベル
-        ctx.fillStyle = color;
-        ctx.font = "bold 13px 'Segoe UI', sans-serif";
-        ctx.fillText(CORNER_LABELS[i], p.x + 12, p.y - 8);
-      });
+    ctx.fillStyle = isHome ? "rgba(0,200,255,0.9)" : "rgba(255,255,255,0.6)";
+    ctx.font      = isHome ? "bold 10px monospace" : "9px monospace";
+    ctx.fillText(k.key, k.x - 4, k.y + 3);
+  }
+}
 
-      // 次にクリックすべき点のアニメーション（点滅）
-      if (calibMode && keyboardPoints.length < 4) {
-        const nextIdx = keyboardPoints.length;
-        const color   = CORNER_COLORS[nextIdx];
-        const pulse   = 0.5 + 0.5 * Math.sin(Date.now() / 250);
+// ------------------------------
+// ⑥ MediaPipe Hands 設定
+// ------------------------------
+const hands = new Hands({
+  locateFile: file =>
+    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
 
-        // 四隅のヒント位置
-        const hintPositions = [
-          { x: 40,              y: 40              }, // 左上
-          { x: canvas.width-40, y: 40              }, // 右上
-          { x: 40,              y: canvas.height-40 }, // 左下
-          { x: canvas.width-40, y: canvas.height-40 }, // 右下
-        ];
-        const h = hintPositions[nextIdx];
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
 
-        ctx.beginPath();
-        ctx.arc(h.x, h.y, 14 + 4 * pulse, 0, Math.PI * 2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth   = 2;
-        ctx.globalAlpha = 0.6 + 0.4 * pulse;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+hands.onResults(results => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-        ctx.fillStyle = color;
-        ctx.font = "bold 12px 'Segoe UI', sans-serif";
-        ctx.fillText(CORNER_LABELS[nextIdx], h.x + 18, h.y + 5);
-      }
+  // キャリブレーション済みならキーグリッドを表示
+  if (keys.length > 0) drawKeyOverlay();
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
+
+  const landmarks = results.multiHandLandmarks[0];
+
+  // 骨格描画
+  drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
+    color: "#00FF00", lineWidth: 3
+  });
+  drawLandmarks(ctx, landmarks, { color: "#FF0000", radius: 4 });
+
+  // ホームポジション判定（F・J 両方取得済みのとき）
+  if (F_pos && J_pos) {
+    let y = 30;
+    for (const [fingerIndex, homeKey] of Object.entries(fingerToHome)) {
+      const lm = landmarks[Number(fingerIndex)];
+      const fx = lm.x * canvas.width;
+      const fy = lm.y * canvas.height;
+
+      const ok = isOnHome(fx, fy, homeKey);
+
+      // 指先の色を変える（OK=シアン / NG=黄）
+      ctx.beginPath();
+      ctx.arc(fx, fy, 8, 0, Math.PI * 2);
+      ctx.fillStyle = ok ? "rgba(0,255,255,0.5)" : "rgba(255,200,0,0.5)";
+      ctx.fill();
+
+      // 左上テキスト
+      ctx.fillStyle = ok ? "cyan" : "yellow";
+      ctx.font      = "bold 16px monospace";
+      ctx.fillText(`${homeKey}: ${ok ? "✅ OK" : "❌ ズレ"}`, 10, y);
+      y += 22;
     }
-
-    // ─── キーボードレイアウト定義 ────────────────────────────
-    //
-    //  JIS配列の3行を定義。各行の「行内オフセット比率」はキーボードの
-    //  物理的な段差（stagger）を再現する。
-    //
-    //    Q行: offset 0.00  (基準)
-    //    A行: offset 0.05  (Qより約半キー分右)
-    //    Z行: offset 0.12  (さらに右)
-    //
-    const KB_ROWS = [
-      { keys: ["Q","W","E","R","T","Y","U","I","O","P"], rowOffset: 0.00 },
-      { keys: ["A","S","D","F","G","H","J","K","L"],     rowOffset: 0.05 },
-      { keys: ["Z","X","C","V","B","N","M",",",".","/"], rowOffset: 0.12 },
-    ];
-    const NUM_ROWS = KB_ROWS.length;           // 3
-    const MAX_COLS = Math.max(...KB_ROWS.map(r => r.keys.length)); // 10
-
-    // キャリブレーション4点(Q,P,Z,？)から全キー座標を生成する
-    //
-    //   pts[0]=Q(左上)  pts[1]=P(右上)
-    //   pts[2]=Z(左下)  pts[3]=？(右下)
-    //
-    // → 行方向は Q↔Z、列方向は Q↔P を線形補間して求める。
-    //
-    function buildKeys(pts) {
-      const keys = [];
-
-      KB_ROWS.forEach((row, ri) => {
-        // 行の縦位置: ri=0→Q行, ri=2→Z行
-        const rowT = ri / (NUM_ROWS - 1);  // 0.0 〜 1.0
-
-        // 行の左端・右端をキャリブレーション点から補間
-        //   左端: Q(pts[0]) → Z(pts[2])
-        //   右端: P(pts[1]) → ？(pts[3])
-        const leftX  = pts[0].x + (pts[2].x - pts[0].x) * rowT;
-        const leftY  = pts[0].y + (pts[2].y - pts[0].y) * rowT;
-        const rightX = pts[1].x + (pts[3].x - pts[1].x) * rowT;
-        const rightY = pts[1].y + (pts[3].y - pts[1].y) * rowT;
-
-        row.keys.forEach((key, ci) => {
-          // 列の横位置（staggerオフセットを加味）
-          const colT = (ci + row.rowOffset) / (MAX_COLS - 1);  // 0.0〜1.0
-
-          const x = leftX + (rightX - leftX) * colT;
-          const y = leftY + (rightY - leftY) * colT;
-
-          keys.push({ key, x, y });
-        });
-      });
-
-      return keys;
-    }
-
-    // 指先に最も近いキーを返す（ユークリッド距離の最小値）
-    function getNearestKey(fx, fy, keys) {
-      let nearest = null;
-      let minDist = Infinity;
-      for (const k of keys) {
-        const d = Math.hypot(fx - k.x, fy - k.y);
-        if (d < minDist) { minDist = d; nearest = k; }
-      }
-      return { ...nearest, dist: minDist };
-    }
-
-    // キー座標をcanvas上に可視化する（デバッグ用）
-    function drawKeyOverlay(keys) {
-      for (const k of keys) {
-        ctx.beginPath();
-        ctx.arc(k.x, k.y, 5, 0, Math.PI * 2);
-        ctx.fillStyle   = "rgba(255,255,255,0.25)";
-        ctx.strokeStyle = "rgba(255,255,255,0.5)";
-        ctx.lineWidth   = 1;
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.fillStyle = "rgba(255,255,255,0.7)";
-        ctx.font      = "9px monospace";
-        ctx.fillText(k.key, k.x - 3, k.y + 3);
-      }
-    }
-
-    // ─── MediaPipe Hands ─────────────────────────────────────
-    const hands = new Hands({
-      locateFile: file =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-    });
-
-    hands.setOptions({
-      maxNumHands: 1,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7
-    });
-
-    hands.onResults(results => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      // キャリブレーションのオーバーレイを常に描画
-      drawCalibOverlay();
-
-      // キャリブレーション済みならキーグリッドを表示
-      const keys = savedPoints ? buildKeys(savedPoints) : null;
-      if (keys) drawKeyOverlay(keys);
-
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        badge.classList.add("visible");
-
-        for (const landmarks of results.multiHandLandmarks) {
-          drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
-            color: "#00FF88", lineWidth: 2
-          });
-          drawLandmarks(ctx, landmarks, {
-            color: "#FF4444", fillColor: "#FF4444", radius: 4
-          });
-
-          const px = lm =>
-            `x:${Math.round(lm.x * canvas.width)}, y:${Math.round(lm.y * canvas.height)}`;
-
-          tipPos.textContent   = px(landmarks[8]);
-          thumbPos.textContent = px(landmarks[4]);
-          wristPos.textContent = px(landmarks[0]);
-
-          // ─── ★ 指→キー対応づけ ────────────────────────────
-          // キャリブレーション完了後のみ実行
-          if (keys) {
-            // 人差し指先端（landmark 8）のcanvasピクセル座標
-            const finger = landmarks[8];
-            const fx = finger.x * canvas.width;
-            const fy = finger.y * canvas.height;
-
-            // 最近傍キーを取得
-            const nearest = getNearestKey(fx, fy, keys);
-
-            // 最近傍キーを強調表示（黄色の円）
-            ctx.beginPath();
-            ctx.arc(nearest.x, nearest.y, 12, 0, Math.PI * 2);
-            ctx.strokeStyle = "#ffd600";
-            ctx.lineWidth   = 2;
-            ctx.stroke();
-
-            // 指先→キー間の距離線
-            ctx.beginPath();
-            ctx.moveTo(fx, fy);
-            ctx.lineTo(nearest.x, nearest.y);
-            ctx.strokeStyle = "rgba(255,214,0,0.5)";
-            ctx.lineWidth   = 1;
-            ctx.setLineDash([4, 3]);
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            // 画面左上にキー名を大きく表示
-            ctx.fillStyle = "rgba(0,0,0,0.55)";
-            ctx.fillRect(8, 8, 220, 36);
-            ctx.fillStyle = "#ffd600";
-            ctx.font      = "bold 20px 'Segoe UI', sans-serif";
-            ctx.fillText(`人差し指 → ${nearest.key}`, 14, 32);
-          }
-        }
-      } else {
-        badge.classList.remove("visible");
-        tipPos.textContent = thumbPos.textContent = wristPos.textContent = "--";
-      }
-    });
-
-    // ─── カメラ起動 ──────────────────────────────────────────
-    const camera = new Camera(video, {
-      onFrame: async () => {
-        await hands.send({ image: video });
-      },
-      width: 640,
-      height: 480
-    });
-
-    camera.start()
-      .then(() => {
-        canvas.width  = 640;
-        canvas.height = 480;
-        statusDot.className    = "ready";
-        statusText.textContent = "カメラ起動完了 ✓";
-      })
-      .catch(err => {
-        statusDot.className    = "error";
-        statusText.textContent = `エラー: ${err.message}`;
-        console.error(err);
-      });
-  </script>
+  }
+});
+</script>
 </body>
 </html>
