@@ -375,6 +375,87 @@
       }
     }
 
+    // ─── キーボードレイアウト定義 ────────────────────────────
+    //
+    //  JIS配列の3行を定義。各行の「行内オフセット比率」はキーボードの
+    //  物理的な段差（stagger）を再現する。
+    //
+    //    Q行: offset 0.00  (基準)
+    //    A行: offset 0.05  (Qより約半キー分右)
+    //    Z行: offset 0.12  (さらに右)
+    //
+    const KB_ROWS = [
+      { keys: ["Q","W","E","R","T","Y","U","I","O","P"], rowOffset: 0.00 },
+      { keys: ["A","S","D","F","G","H","J","K","L"],     rowOffset: 0.05 },
+      { keys: ["Z","X","C","V","B","N","M",",",".","/"], rowOffset: 0.12 },
+    ];
+    const NUM_ROWS = KB_ROWS.length;           // 3
+    const MAX_COLS = Math.max(...KB_ROWS.map(r => r.keys.length)); // 10
+
+    // キャリブレーション4点(Q,P,Z,？)から全キー座標を生成する
+    //
+    //   pts[0]=Q(左上)  pts[1]=P(右上)
+    //   pts[2]=Z(左下)  pts[3]=？(右下)
+    //
+    // → 行方向は Q↔Z、列方向は Q↔P を線形補間して求める。
+    //
+    function buildKeys(pts) {
+      const keys = [];
+
+      KB_ROWS.forEach((row, ri) => {
+        // 行の縦位置: ri=0→Q行, ri=2→Z行
+        const rowT = ri / (NUM_ROWS - 1);  // 0.0 〜 1.0
+
+        // 行の左端・右端をキャリブレーション点から補間
+        //   左端: Q(pts[0]) → Z(pts[2])
+        //   右端: P(pts[1]) → ？(pts[3])
+        const leftX  = pts[0].x + (pts[2].x - pts[0].x) * rowT;
+        const leftY  = pts[0].y + (pts[2].y - pts[0].y) * rowT;
+        const rightX = pts[1].x + (pts[3].x - pts[1].x) * rowT;
+        const rightY = pts[1].y + (pts[3].y - pts[1].y) * rowT;
+
+        row.keys.forEach((key, ci) => {
+          // 列の横位置（staggerオフセットを加味）
+          const colT = (ci + row.rowOffset) / (MAX_COLS - 1);  // 0.0〜1.0
+
+          const x = leftX + (rightX - leftX) * colT;
+          const y = leftY + (rightY - leftY) * colT;
+
+          keys.push({ key, x, y });
+        });
+      });
+
+      return keys;
+    }
+
+    // 指先に最も近いキーを返す（ユークリッド距離の最小値）
+    function getNearestKey(fx, fy, keys) {
+      let nearest = null;
+      let minDist = Infinity;
+      for (const k of keys) {
+        const d = Math.hypot(fx - k.x, fy - k.y);
+        if (d < minDist) { minDist = d; nearest = k; }
+      }
+      return { ...nearest, dist: minDist };
+    }
+
+    // キー座標をcanvas上に可視化する（デバッグ用）
+    function drawKeyOverlay(keys) {
+      for (const k of keys) {
+        ctx.beginPath();
+        ctx.arc(k.x, k.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle   = "rgba(255,255,255,0.25)";
+        ctx.strokeStyle = "rgba(255,255,255,0.5)";
+        ctx.lineWidth   = 1;
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        ctx.font      = "9px monospace";
+        ctx.fillText(k.key, k.x - 3, k.y + 3);
+      }
+    }
+
     // ─── MediaPipe Hands ─────────────────────────────────────
     const hands = new Hands({
       locateFile: file =>
@@ -395,6 +476,10 @@
       // キャリブレーションのオーバーレイを常に描画
       drawCalibOverlay();
 
+      // キャリブレーション済みならキーグリッドを表示
+      const keys = savedPoints ? buildKeys(savedPoints) : null;
+      if (keys) drawKeyOverlay(keys);
+
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         badge.classList.add("visible");
 
@@ -412,6 +497,42 @@
           tipPos.textContent   = px(landmarks[8]);
           thumbPos.textContent = px(landmarks[4]);
           wristPos.textContent = px(landmarks[0]);
+
+          // ─── ★ 指→キー対応づけ ────────────────────────────
+          // キャリブレーション完了後のみ実行
+          if (keys) {
+            // 人差し指先端（landmark 8）のcanvasピクセル座標
+            const finger = landmarks[8];
+            const fx = finger.x * canvas.width;
+            const fy = finger.y * canvas.height;
+
+            // 最近傍キーを取得
+            const nearest = getNearestKey(fx, fy, keys);
+
+            // 最近傍キーを強調表示（黄色の円）
+            ctx.beginPath();
+            ctx.arc(nearest.x, nearest.y, 12, 0, Math.PI * 2);
+            ctx.strokeStyle = "#ffd600";
+            ctx.lineWidth   = 2;
+            ctx.stroke();
+
+            // 指先→キー間の距離線
+            ctx.beginPath();
+            ctx.moveTo(fx, fy);
+            ctx.lineTo(nearest.x, nearest.y);
+            ctx.strokeStyle = "rgba(255,214,0,0.5)";
+            ctx.lineWidth   = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 画面左上にキー名を大きく表示
+            ctx.fillStyle = "rgba(0,0,0,0.55)";
+            ctx.fillRect(8, 8, 220, 36);
+            ctx.fillStyle = "#ffd600";
+            ctx.font      = "bold 20px 'Segoe UI', sans-serif";
+            ctx.fillText(`人差し指 → ${nearest.key}`, 14, 32);
+          }
         }
       } else {
         badge.classList.remove("visible");
