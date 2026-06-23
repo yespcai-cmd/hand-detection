@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>手の検出 – MediaPipe Hands</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0f0f0f;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+      gap: 16px;
+    }
+
+    h1 {
+      font-size: 1.3rem;
+      font-weight: 500;
+      color: #aaa;
+      letter-spacing: 0.05em;
+    }
+
+    /* ステータスバー */
+    #status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 0.9rem;
+    }
+
+    #status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #555;
+      transition: background 0.3s;
+    }
+    #status-dot.ready   { background: #00c853; box-shadow: 0 0 6px #00c853; }
+    #status-dot.loading { background: #ffd600; box-shadow: 0 0 6px #ffd600; }
+    #status-dot.error   { background: #f44336; box-shadow: 0 0 6px #f44336; }
+
+    /* canvasラッパー */
+    #canvas-wrapper {
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #2a2a2a;
+      max-width: 100%;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* 検出中バッジ */
+    #detect-badge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(0, 200, 83, 0.85);
+      color: #000;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    #detect-badge.visible { opacity: 1; }
+
+    /* ランドマーク情報 */
+    #info {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.82rem;
+      line-height: 1.8;
+      width: 100%;
+      max-width: 640px;
+      color: #888;
+    }
+    #info span { color: #e0e0e0; font-weight: 500; }
+  </style>
+</head>
+<body>
+
+  <h1>✋ MediaPipe Hands デモ</h1>
+
+  <div id="status">
+    <div id="status-dot" class="loading"></div>
+    <span id="status-text">カメラ起動中…</span>
+  </div>
+
+  <div id="canvas-wrapper">
+    <canvas id="canvas"></canvas>
+    <div id="detect-badge">🖐 検出中</div>
+  </div>
+
+  <div id="info">
+    人差し指先端 (landmark 8)：<span id="tip-pos">--</span><br>
+    親指先端 (landmark 4)：<span id="thumb-pos">--</span><br>
+    手首 (landmark 0)：<span id="wrist-pos">--</span>
+  </div>
+
+  <!-- video は非表示で使う -->
+  <video id="cam" autoplay playsinline style="display:none;"></video>
+
+  <!--
+    ★ 修正ポイント①
+    ES Module形式（import文）ではなく、通常の<script>タグで読み込む。
+    MediaPipeのCDNはUMD形式で配信されており、この方法が安定している。
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <script>
+    const video      = document.getElementById("cam");
+    const canvas     = document.getElementById("canvas");
+    const ctx        = canvas.getContext("2d");
+    const statusDot  = document.getElementById("status-dot");
+    const statusText = document.getElementById("status-text");
+    const badge      = document.getElementById("detect-badge");
+    const tipPos     = document.getElementById("tip-pos");
+    const thumbPos   = document.getElementById("thumb-pos");
+    const wristPos   = document.getElementById("wrist-pos");
+
+    // ─── ① MediaPipe Hands の初期化 ───────────────────────────
+    const hands = new Hands({
+      locateFile: file =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,         // 検出する手の最大数
+      modelComplexity: 1,     // 0=軽量 / 1=高精度
+      minDetectionConfidence: 0.7,  // 初回検出の最低確信度
+      minTrackingConfidence: 0.7    // トラッキング維持の最低確信度
+    });
+
+    // ─── ② 結果コールバック ───────────────────────────────────
+    //   毎フレーム hands.send() → モデル推論 → ここが呼ばれる
+    hands.onResults(results => {
+      // キャンバスをクリアしてカメラ映像を描画
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      // multiHandLandmarks：検出された各手の21点座標（正規化 0〜1）
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        badge.classList.add("visible");
+
+        for (const landmarks of results.multiHandLandmarks) {
+
+          // 接続線を描画（HAND_CONNECTIONS = 指の骨格）
+          drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
+            color: "#00FF88",
+            lineWidth: 2
+          });
+
+          // 各関節点を描画
+          drawLandmarks(ctx, landmarks, {
+            color: "#FF4444",
+            fillColor: "#FF4444",
+            radius: 4
+          });
+
+          // 座標情報を更新（正規化座標 → ピクセルに変換）
+          const px = (lm) =>
+            `x:${Math.round(lm.x * canvas.width)}, y:${Math.round(lm.y * canvas.height)}`;
+
+          tipPos.textContent   = px(landmarks[8]);  // 人差し指先端
+          thumbPos.textContent = px(landmarks[4]);  // 親指先端
+          wristPos.textContent = px(landmarks[0]);  // 手首
+        }
+      } else {
+        badge.classList.remove("visible");
+        tipPos.textContent = thumbPos.textContent = wristPos.textContent = "--";
+      }
+    });
+
+    // ─── ③ カメラ起動 ────────────────────────────────────────
+    //   ★ 修正ポイント②
+    //   MediaPipe の Camera ユーティリティを使うと、
+    //   フレームの送信（hands.send）をライブラリが自動管理してくれる。
+    //   手動の requestAnimationFrame ループよりも安定する。
+    const camera = new Camera(video, {
+      onFrame: async () => {
+        // フレームごとに推論エンジンへ画像を送る
+        await hands.send({ image: video });
+      },
+      width: 640,
+      height: 480
+    });
+
+    camera.start()
+      .then(() => {
+        canvas.width  = 640;
+        canvas.height = 480;
+        statusDot.className  = "ready";
+        statusText.textContent = "カメラ起動完了 ✓";
+      })
+      .catch(err => {
+        statusDot.className  = "error";
+        statusText.textContent = `エラー: ${err.message}`;
+        console.error(err);
+      });
+  </script>
+</body>
+</html>
