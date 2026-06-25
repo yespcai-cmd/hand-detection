@@ -486,6 +486,14 @@ typingInput.addEventListener("input", e => {
     typingInput.disabled = true;
     if (calibDone) genBtn.disabled = false;
   }
+  // 入力エリアのイベントリスナーの直後あたりに追加
+typingInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    typingFinished = true;
+    typingInput.disabled = true;
+    if (calibDone) genBtn.disabled = false;
+  }
 });
 
 // ═══════════════════════════════════════════════════════
