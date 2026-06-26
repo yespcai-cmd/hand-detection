@@ -406,94 +406,152 @@ function kanaToRomaji(text) {
   return kanaToRomajiSegments(text).map(s => s.primary).join('');
 }
 
-// セグメントリストから「許容入力」を考慮しつつ
-// typed 文字列が正しいかをチェックし、表示用・統計用の情報を返す
-// 返り値: { displayTarget, charStates }
-//   displayTarget: 現在の"対象ローマ字"文字列（代替マッチに応じて変化）
-//   charStates[i]: 'correct'|'wrong'|'pending'|'cursor'
+// セグメントリストと typed から表示・判定情報を生成する
+//
+// 設計方針:
+//   - displayTarget は常に primary の連結（表示は変わらない）
+//   - typed の各文字がどのセグメントのどの候補に対応するかを追跡
+//   - セグメントごとに「どの候補で消費したか」を確定し tIdx を正確に進める
+//   - primary と alt で文字数が異なる場合（n vs nn）も正しく処理する
+//
+// 返り値:
+//   displayTarget : primary 連結の表示文字列
+//   charStates    : displayTarget の各文字に対応する状態配列
+//                   'correct' | 'wrong' | 'cursor' | 'pending'
 function matchTypedToSegments(segments, typed) {
-  // 動的にセグメントをスキャンして代替マッチを判定
-  const charStates = [];
-  let tIdx = 0; // typed のカーソル
-  const resolvedPrimary = []; // 最終的に使用した表記を記録
+  // ── Step1: typed をセグメントに割り当て、各セグメントの消費候補を確定 ──
+  // resolved[i] = { cand: 使用候補文字列, complete: 完全一致したか }
+  const resolved = [];
+  let tIdx = 0;
 
   for (const seg of segments) {
-    const candidates = [seg.primary, ...seg.alts];
-    // どの候補にどこまでマッチするか
-    let bestMatch = null;
+    // 長い候補を優先（longest match）: nn を n より先に試す
+    const candidates = [seg.primary, ...seg.alts].sort((a,b) => b.length - a.length);
+    const remaining = typed.length - tIdx;
+
+    if (remaining <= 0) {
+      // typed が尽きた：このセグメントは未入力
+      resolved.push({ cand: seg.primary, state: 'pending' });
+      continue;
+    }
+
+    // 完全一致する候補を探す
+    let fullMatch = null;
     for (const cand of candidates) {
-      let allMatch = true;
-      for (let ci = 0; ci < cand.length; ci++) {
-        const ti = tIdx + ci;
-        if (ti >= typed.length) { allMatch = false; break; }
-        if (typed[ti] !== cand[ci]) { allMatch = false; break; }
-      }
-      if (allMatch) { bestMatch = cand; break; }
-    }
-
-    // マッチした候補があれば正解扱いで進める
-    const useStr = bestMatch || seg.primary;
-    resolvedPrimary.push(useStr);
-
-    for (let ci = 0; ci < useStr.length; ci++) {
-      const ti = tIdx + ci;
-      if (ti < typed.length) {
-        // 入力済み: この文字が useStr の先頭ci文字目と合うか
-        // ただし useStr が bestMatch で決まっているなら全部correct
-        if (bestMatch) {
-          charStates.push('correct');
-        } else {
-          // primary で比較（まだ候補確定前）
-          // 入力中にリアルタイムで代替判定：typed[tIdx..tIdx+ci] が何らかの候補の前方一致なら保留
-          const partTyped = typed.slice(tIdx, ti + 1);
-          const anyPrefixMatch = candidates.some(c => c.startsWith(partTyped));
-          if (anyPrefixMatch) {
-            charStates.push('correct');
-          } else {
-            charStates.push('wrong');
-          }
+      if (remaining >= cand.length) {
+        let ok = true;
+        for (let ci = 0; ci < cand.length; ci++) {
+          if (typed[tIdx + ci] !== cand[ci]) { ok = false; break; }
         }
-      } else if (ti === typed.length) {
-        charStates.push('cursor');
-      } else {
-        charStates.push('pending');
+        if (ok) { fullMatch = cand; break; }
       }
     }
-    tIdx += useStr.length;
+
+    if (fullMatch) {
+      resolved.push({ state: 'correct', consumedTyped: fullMatch.length });
+      tIdx += fullMatch.length;
+      continue;
+    }
+
+    // 前方一致する候補を探す（入力途中）
+    let prefixMatch = null;
+    for (const cand of candidates) {
+      const part = typed.slice(tIdx, tIdx + remaining);
+      if (cand.startsWith(part)) { prefixMatch = cand; break; }
+    }
+
+    if (prefixMatch) {
+      resolved.push({ state: 'partial', consumedTyped: remaining });
+      tIdx += remaining;
+      continue;
+    }
+
+    // どの候補にも合わない → 誤入力
+    const consume = Math.min(remaining, seg.primary.length);
+    resolved.push({ state: 'wrong', consumedTyped: consume });
+    tIdx += consume;
+  }
+
+  // ── Step2: displayTarget（primary 連結）と charStates を生成 ──
+  // displayTarget の各文字位置は primary に対応
+  // charStates はそのまま primary の各文字に割り当てる
+  const displayParts = [];
+  const charStates = [];
+  let cursorPlaced = false;
+
+  for (let si = 0; si < segments.length; si++) {
+    const primary = segments[si].primary;
+    const res = resolved[si];
+    displayParts.push(primary);
+
+    for (let ci = 0; ci < primary.length; ci++) {
+      if (res.state === 'correct') {
+        // 完全一致（alt含む）→ primary 全文字を correct
+        charStates.push('correct');
+      } else if (res.state === 'wrong') {
+        charStates.push(ci < res.consumedTyped ? 'wrong' : 'pending');
+      } else if (res.state === 'partial') {
+        // 入力中：primary の先頭から consumedTyped 文字分は correct、
+        // 次の1文字がカーソル、残りは pending
+        if (ci < res.consumedTyped) {
+          charStates.push('correct');
+        } else if (!cursorPlaced) {
+          charStates.push('cursor');
+          cursorPlaced = true;
+        } else {
+          charStates.push('pending');
+        }
+      } else {
+        // pending
+        if (!cursorPlaced) {
+          charStates.push('cursor');
+          cursorPlaced = true;
+        } else {
+          charStates.push('pending');
+        }
+      }
+    }
   }
 
   return {
-    displayTarget: resolvedPrimary.join(''),
+    displayTarget: displayParts.join(''),
     charStates,
-    totalLen: resolvedPrimary.reduce((s,r)=>s+r.length, 0),
+    totalLen: displayParts.join('').length,
   };
 }
 
-// セグメントからフラットな「正規ローマ字配列」を生成（代替考慮の正解判定用）
+// セグメントと typed から「期待文字配列」を生成（誤字カウント用）
+// expected[i] = typed[i] が正解のとき一致すべき文字
 function getExpectedAtPosition(segments, typed) {
-  // typed を先頭から読んで各位置で「何が正解か」を返す
-  // 戻り値: expectedChars[i] = typed[i] が正しい場合の文字
   const expected = [];
   let tIdx = 0;
+
   for (const seg of segments) {
-    const candidates = [seg.primary, ...seg.alts];
-    // typed の tIdx 以降が candidates のどれかの前方一致か確認
+    const candidates = [seg.primary, ...seg.alts].sort((a,b) => b.length - a.length);
+    const remaining = typed.length - tIdx;
+    if (remaining <= 0) { seg.primary.split('').forEach(c => expected.push(c)); continue; }
+
+    // 完全一致候補
     let matched = null;
     for (const cand of candidates) {
-      let ok = true;
-      for (let ci = 0; ci < cand.length; ci++) {
-        if (tIdx + ci >= typed.length) break;
-        if (typed[tIdx + ci] !== cand[ci]) { ok = false; break; }
-      }
-      // typed がここまで全部マッチ（完全一致）
-      if (ok && tIdx + cand.length <= typed.length) {
-        matched = cand; break;
+      if (remaining >= cand.length) {
+        let ok = true;
+        for (let ci = 0; ci < cand.length; ci++) {
+          if (typed[tIdx + ci] !== cand[ci]) { ok = false; break; }
+        }
+        if (ok) { matched = cand; break; }
       }
     }
+    // 前方一致候補
+    if (!matched) {
+      for (const cand of candidates) {
+        const part = typed.slice(tIdx, tIdx + cand.length);
+        if (cand.startsWith(part)) { matched = cand; break; }
+      }
+    }
+
     const use = matched || seg.primary;
-    for (let ci = 0; ci < use.length; ci++) {
-      expected.push(use[ci]);
-    }
+    use.split('').forEach(c => expected.push(c));
     tIdx += use.length;
   }
   return expected;
