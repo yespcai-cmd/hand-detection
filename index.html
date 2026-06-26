@@ -366,9 +366,14 @@ function kanaToRomajiSegments(text) {
   const segments = [];
   let i = 0;
   while (i < text.length) {
+    // ん: 後続に応じて primary を決めつつ、常に n/nn 両方を許容
     if (text[i] === 'ん') {
-      const primary = needsDoubleN(text, i) ? 'nn' : 'n';
-      segments.push({ primary, alts: [] });
+      const forceDouble = needsDoubleN(text, i);
+      // 末尾・子音前は n が primary だが nn も許容
+      // 母音/y/n前は nn が primary だが n も許容
+      const primary = forceDouble ? 'nn' : 'n';
+      const alt     = forceDouble ? 'n'  : 'nn';
+      segments.push({ primary, alts: [alt] });
       i++; continue;
     }
     if (text[i] === 'っ') {
@@ -501,7 +506,7 @@ const SENTENCE_POOL = [
   { display:'手首をまっすぐに保ちます。',      kana:'てくびをまっすぐにたもちます。' },
   { display:'こつこつと練習することが大切です。', kana:'こつこつとれんしゅうすることがたいせつです。' },
   { display:'日本語のタイピングは難しいです。', kana:'にほんごのたいぴんぐはむずかしいです。' },
-  { display:'早く打つよりも正確さを意識します。', kana:'はやくうつよりもせいかくさをいしきします。' },
+  { display:'早く打つより正確さを意識します。', kana:'はやくうつよりせいかくさをいしきします。' },
   { display:'毎日少しずつレベルを上げていきます。', kana:'まいにちすこしずつれべるをあげていきます。' },
   { display:'ホームポジションから指を離しません。', kana:'ほーむぽじしょんからゆびをはなしません。' },
   { display:'姿勢を正しくしてキーボードを打ちます。', kana:'しせいをただしくしてきーぼーどをうちます。' },
