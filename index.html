@@ -369,14 +369,15 @@ function kanaToRomajiSegments(text) {
   const segments = [];
   let i = 0;
   while (i < text.length) {
-    // ん: 後続に応じて primary を決めつつ、常に n/nn 両方を許容
+    // ん の処理:
+    //   母音(a/i/u/e/o)・y・n が続く場合 → nn 必須（alt なし）
+    //   子音前・末尾             → n が primary、nn も許容
     if (text[i] === 'ん') {
-      const forceDouble = needsDoubleN(text, i);
-      // 末尾・子音前は n が primary だが nn も許容
-      // 母音/y/n前は nn が primary だが n も許容
-      const primary = forceDouble ? 'nn' : 'n';
-      const alt     = forceDouble ? 'n'  : 'nn';
-      segments.push({ primary, alts: [alt] });
+      if (needsDoubleN(text, i)) {
+        segments.push({ primary: 'nn', alts: [] });
+      } else {
+        segments.push({ primary: 'n', alts: ['nn'] });
+      }
       i++; continue;
     }
     if (text[i] === 'っ') {
