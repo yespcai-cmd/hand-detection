@@ -337,10 +337,27 @@ const KANA_TO_ROMAN = {
   'ー':'-','。':'. ','、':', ',
 };
 
+// ん の後続判定: 母音(a/i/u/e/o)・y・n が続く場合は nn、それ以外/末尾は n
+function needsDoubleN(text, i) {
+  const next = text[i + 1];
+  if (!next) return false;               // 末尾 → n 1個
+  if (next === 'ん') return true;         // ん+ん → nn
+  // 次のかな（拗音考慮）のローマ字先頭を取得
+  const two = next + (text[i + 2] || '');
+  const roman = KANA_TO_ROMAN[two] || KANA_TO_ROMAN[next];
+  if (!roman) return false;
+  return 'aeiouyn'.includes(roman[0].toLowerCase());
+}
+
 function kanaToRomaji(text) {
   let result = '';
   let i = 0;
   while (i < text.length) {
+    // ん: 後続に応じて n / nn
+    if (text[i] === 'ん') {
+      result += needsDoubleN(text, i) ? 'nn' : 'n';
+      i++; continue;
+    }
     // っ: 次の音の先頭子音を重ねる
     if (text[i] === 'っ') {
       const two = text[i+1] ? text[i+1] + (text[i+2]||'') : '';
@@ -365,38 +382,62 @@ function kanaToRomaji(text) {
 // ═══════════════════════════════════════════════════════
 //  練習文データ（日本語かな表記 + 表示用漢字かな混じり）
 // ═══════════════════════════════════════════════════════
-const PROMPTS = [
-  { display:'私は毎日練習します。',         kana:'わたしはまいにちれんしゅうします。' },
-  { display:'今日はいい天気ですね。',        kana:'きょうはいいてんきですね。' },
-  { display:'指を正しく置きましょう。',      kana:'ゆびをただしくおきましょう。' },
-  { display:'手首をまっすぐに保つ。',        kana:'てくびをまっすぐにたもつ。' },
+// 単文プール（末尾に「。」付き）
+const SENTENCE_POOL = [
+  { display:'私は毎日練習します。',           kana:'わたしはまいにちれんしゅうします。' },
+  { display:'今日はいい天気ですね。',          kana:'きょうはいいてんきですね。' },
+  { display:'指を正しく置きましょう。',        kana:'ゆびをただしくおきましょう。' },
+  { display:'手首をまっすぐに保ちます。',      kana:'てくびをまっすぐにたもちます。' },
   { display:'こつこつと練習することが大切です。', kana:'こつこつとれんしゅうすることがたいせつです。' },
-  { display:'日本語のタイピングは難しい。',   kana:'にほんごのたいぴんぐはむずかしい。' },
-  { display:'早く打つよりも正確さを意識する。', kana:'はやくうつよりもせいかくさをいしきする。' },
-  { display:'毎日少しずつレベルを上げていこう。', kana:'まいにちすこしずつれべるをあげていこう。' },
-  { display:'ホームポジションから指を離さない。', kana:'ほーむぽじしょんからゆびをはなさない。' },
-  { display:'姿勢を正しくしてキーボードを打つ。', kana:'しせいをただしくしてきーぼーどをうつ。' },
+  { display:'日本語のタイピングは難しいです。', kana:'にほんごのたいぴんぐはむずかしいです。' },
+  { display:'早く打つより正確さを意識します。', kana:'はやくうつよりもせいかくさをいしきします。' },
+  { display:'毎日少しずつレベルを上げていきます。', kana:'まいにちすこしずつれべるをあげていきます。' },
+  { display:'ホームポジションから指を離しません。', kana:'ほーむぽじしょんからゆびをはなしません。' },
+  { display:'姿勢を正しくしてキーボードを打ちます。', kana:'しせいをただしくしてきーぼーどをうちます。' },
+  { display:'キーを見ないで入力できるように練習します。', kana:'きーをみないでにゅうりょくできるようにれんしゅうします。' },
+  { display:'小指もしっかり使うことが上達のコツです。', kana:'こゆびもしっかりつかうことがじょうたつのこつです。' },
+  { display:'タイピングの速度は正確さから生まれます。', kana:'たいぴんぐのそくどはせいかくさからうまれます。' },
+  { display:'画面を見ながら文字を入力します。', kana:'がめんをみながらもじをにゅうりょくします。' },
+  { display:'ゆっくり確認しながら打つと間違いが減ります。', kana:'ゆっくりかくにんしながらうつとまちがいがへります。' },
+  { display:'手首を浮かせると疲れにくくなります。', kana:'てくびをうかせるとつかれにくくなります。' },
+  { display:'呼吸を整えてからタイピングを始めます。', kana:'こきゅうをととのえてからたいぴんぐをはじめます。' },
+  { display:'日本語入力の練習は毎日続けましょう。', kana:'にほんごにゅうりょくのれんしゅうはまいにちつづけましょう。' },
+  { display:'正しいフォームが速さにつながります。', kana:'ただしいふぉーむがはやさにつながります。' },
+  { display:'肩の力を抜いてリラックスして打ちます。', kana:'かたのちからをぬいてりらっくすしてうちます。' },
 ];
 
-let currentPromptObj = null;  // { display, kana, romaji }
-let currentRomaji    = "";    // 入力対象のローマ字文字列
+let currentPromptObj = null;  // { display, kana } — 4文連結済み
+let currentRomaji    = "";    // 入力対象のローマ字文字列（4文分）
 let typingStartTime  = null;
 let typingFinished   = false;
 let missedKeys       = {};    // ミスしたローマ字キー集計
 
+// プールからn文をランダムに選んで重複なしで返す
+function sampleSentences(n) {
+  const pool = [...SENTENCE_POOL];
+  const result = [];
+  for (let i = 0; i < n && pool.length > 0; i++) {
+    const idx = Math.floor(Math.random() * pool.length);
+    result.push(pool.splice(idx, 1)[0]);
+  }
+  return result;
+}
+
 function pickPrompt() {
-  const idx = Math.floor(Math.random() * PROMPTS.length);
-  currentPromptObj = PROMPTS[idx];
+  const sentences = sampleSentences(4);
+  // 4文を連結（日本語表示・かな）
+  currentPromptObj = {
+    display: sentences.map(s => s.display).join('　'),  // 全角スペース区切り
+    kana:    sentences.map(s => s.kana).join(''),        // 続けて変換
+  };
   currentRomaji    = kanaToRomaji(currentPromptObj.kana);
   typingStartTime  = null;
   typingFinished   = false;
   missedKeys       = {};
-  typingInput.value   = "";
+  typingInput.value    = "";
   typingInput.disabled = false;
   typingInput.focus();
-  // 日本語表示
   promptJaEl.textContent = currentPromptObj.display;
-  // ローマ字カラーレンダリング
   renderRomaji("");
   updateStats("");
   heatmapPanel.style.display = "none";
@@ -486,16 +527,6 @@ typingInput.addEventListener("input", e => {
     typingInput.disabled = true;
     if (calibDone) genBtn.disabled = false;
   }
-  
-  // 入力エリアのイベントリスナーの直後あたりに追加
-typingInput.addEventListener("keydown", e => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    typingFinished = true;
-    typingInput.disabled = true;
-    if (calibDone) genBtn.disabled = false;
-  }
-  });
 });
 
 // ═══════════════════════════════════════════════════════
