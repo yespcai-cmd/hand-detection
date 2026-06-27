@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -209,11 +210,11 @@
 
 <div id="controls">
   <div id="api-key-wrap">
-    <label>Groq Key:</label>
-    <input type="password" id="apiKeyInput" placeholder="gsk_...">
+    <label>名前：</label>
+    <input type="text" id="userNameInput" placeholder="ユーザー名を入力" maxlength="30">
   </div>
   <button id="newPromptBtn">📝 新しい課題文</button>
-  <button id="genAdviceBtn" disabled class="primary">🤖 AI分析</button>
+  <button id="genAdviceBtn" disabled class="primary">🤖 AI分析・記録</button>
   <button id="resetBtn">↺ リセット</button>
 </div>
 
@@ -271,7 +272,7 @@
     <!-- アドバイス -->
     <div class="panel">
       <div class="panel-title">AIアドバイス</div>
-      <div id="advice">キャリブレーション完了後、課題文を入力して「AI分析」を押してください。</div>
+      <div id="advice">キャリブレーション完了後、課題文を入力して「AI分析・記録」を押してください。</div>
     </div>
 
   </div>
@@ -294,7 +295,7 @@ const adviceBox    = document.getElementById("advice");
 const genBtn       = document.getElementById("genAdviceBtn");
 const resetBtn     = document.getElementById("resetBtn");
 const newPromptBtn = document.getElementById("newPromptBtn");
-const apiKeyInput  = document.getElementById("apiKeyInput");
+const userNameInput = document.getElementById("userNameInput");
 const typingInput  = document.getElementById("typing-input");
 const promptJaEl   = document.getElementById("prompt-ja");
 const promptRmEl   = document.getElementById("prompt-romaji");
@@ -877,29 +878,34 @@ function captureFrame() {
 }
 
 // ═══════════════════════════════════════════════════════
-//  Groq API — テキスト+画像統合アドバイス
+//  Groq API — テキスト+画像統合アドバイス（GAS経由）
 // ═══════════════════════════════════════════════════════
 async function generateAdvice(postureIssues, typingData) {
-  const apiKey = apiKeyInput.value.trim();
-  if (!apiKey) return "⚠️ Groq API Key を入力してください。";
+  const imageBase64 = captureFrame();
+  return await generateAdviceViaGAS(postureIssues, typingData, imageBase64);
+}
 
-  // ── タイピングデータのサマリー ──
-  const {
-    typed, prompt, promptDisplay,
-    accuracy, wpm, errors,
-    missedKeysSorted
-  } = typingData;
+// ═══════════════════════════════════════════════════════
+//  GAS経由でAIアドバイス生成＆スプレッドシート記録
+//  google.script.run を使用（GASウェブアプリ限定）
+// ═══════════════════════════════════════════════════════
+function generateAdviceViaGAS(postureIssues, typingData, imageBase64) {
+  return new Promise((resolve) => {
+    const {
+      typed, prompt, promptDisplay,
+      accuracy, wpm, errors,
+      missedKeysSorted
+    } = typingData;
 
-  const missedStr = missedKeysSorted.length > 0
-    ? missedKeysSorted.map(([k,n])=>`「${k}」${n}回`).join("、")
-    : "なし";
+    const missedStr = missedKeysSorted.length > 0
+      ? missedKeysSorted.map(([k,n])=>`「${k}」${n}回`).join("、")
+      : "なし";
 
-  // ── プロンプト構築 ──
-  const systemPrompt = `あなたはローマ字入力タイピング指導と姿勢改善の専門コーチです。
+    const systemPrompt = `あなたはローマ字入力タイピング指導と姿勢改善の専門コーチです。
 ウェブカメラで撮影した手元の画像と、タイピングテストの結果データを組み合わせて分析し、
 具体的で実践的なアドバイスを日本語で提供してください。`;
 
-  const userPrompt = `## タイピングテスト結果（ローマ字入力）
+    const userPrompt = `## タイピングテスト結果（ローマ字入力）
 
 - 課題文（日本語）: 「${promptDisplay}」
 - 入力対象ローマ字: "${prompt}"
@@ -932,71 +938,52 @@ ${postureIssues.length > 0
 - 初心者にわかりやすく
 - 励ます口調で`;
 
-  // ── 画像キャプチャ ──
-  const imageBase64 = captureFrame();
+    const {homeRate, moveDistL, moveDistR} = latestMetrics;
+    const totalMove = [8,12,16,20].reduce((s,i)=>s+(moveDistL[i]||0)+(moveDistR[i]||0),0);
+    const score = calcTotalScore(
+      homeRate,
+      latestMetrics.leftAngles,
+      latestMetrics.rightAngles,
+      moveDistL,
+      moveDistR
+    );
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` }
-            },
-            { type: "text", text: userPrompt }
-          ]
-        }
-      ],
-      max_tokens: 600,
-      temperature: 0.65,
-    }),
+    const payload = {
+      userName:      userNameInput.value.trim() || "（未入力）",
+      systemPrompt:  systemPrompt,
+      userPrompt:    userPrompt,
+      imageBase64:   imageBase64 || "",
+      promptDisplay: promptDisplay,
+      accuracy:      accuracy,
+      wpm:           wpm,
+      errors:        errors,
+      missedKeys:    missedStr,
+      postureIssues: postureIssues.join("、") || "問題なし",
+      homeRate:      homeRate,
+      score:         score,
+    };
+
+    // ── GASウェブアプリのURLをここに貼り付けてください ──
+    // デプロイ後に発行されるURL例:
+    // https://script.google.com/macros/s/AKfycbx.../exec
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbwup5b2vaPT--Y4L3ENYVopVlnxQe7j9CYXVHf5ObD3PbhgnnDekTeOYa3_L7WonxsCrA/exec"; // ← 要変更
+
+    fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" }, // GASのCORS制限回避
+      body: JSON.stringify(payload),
+    })
+      .then(r => r.json())
+      .then(result => {
+        const msg = result.saved
+          ? result.advice + "\n\n✅ 記録をスプレッドシートに保存しました。"
+          : result.advice;
+        resolve(msg);
+      })
+      .catch(err => {
+        resolve("⚠️ GAS通信エラー: " + err.message);
+      });
   });
-
-  if (!res.ok) {
-    // vision非対応モデルの場合はテキストのみにフォールバック
-    if (res.status === 400) {
-      return await generateAdviceTextOnly(postureIssues, typingData, apiKey, systemPrompt, userPrompt);
-    }
-    const err = await res.json().catch(()=>({}));
-    return `⚠️ API エラー ${res.status}: ${err?.error?.message||res.statusText}`;
-  }
-
-  const data = await res.json();
-  return (data.choices?.[0]?.message?.content || "アドバイス生成に失敗しました。").trim();
-}
-
-async function generateAdviceTextOnly(postureIssues, typingData, apiKey, systemPrompt, userPrompt) {
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user",   content: userPrompt }
-      ],
-      max_tokens: 600,
-      temperature: 0.65,
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(()=>({}));
-    return `⚠️ API エラー ${res.status}: ${err?.error?.message||res.statusText}`;
-  }
-  const data = await res.json();
-  return (data.choices?.[0]?.message?.content || "アドバイス生成に失敗しました。").trim();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1033,7 +1020,7 @@ genBtn.addEventListener("click", async () => {
 
   genBtn.disabled = true;
   adviceBox.className = "loading";
-  adviceBox.textContent = "🤖 タイピング結果と姿勢データを分析中…";
+  adviceBox.textContent = "🤖 タイピング結果と姿勢データを分析中…（GAS経由でGroq APIに接続中）";
 
   try {
     const result = await generateAdvice(postureIssues, {
@@ -1070,7 +1057,7 @@ resetBtn.addEventListener("click", () => {
   canvas.classList.add("calibrating");
   statusEl.textContent="Q（左上）をクリック (0/4)";
   adviceBox.className="";
-  adviceBox.textContent="キャリブレーション完了後、課題文を入力して「AI分析」を押してください。";
+  adviceBox.textContent="キャリブレーション完了後、課題文を入力して「AI分析・記録」を押してください。";
   genBtn.disabled=true;
   typingInput.disabled=true;
   pickPrompt();
