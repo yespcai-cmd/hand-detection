@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -186,6 +185,46 @@
     #advice.loading { color: #666; animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.4 } }
 
+    /* レベルバッジ */
+    #level-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-size: 0.82rem;
+      font-weight: bold;
+      letter-spacing: 0.08em;
+      border: 1px solid #444;
+      background: #1a1a1a;
+      color: #aaa;
+      transition: all 0.3s;
+    }
+    #level-badge.beginner  { border-color: #4dff9a55; color: #4dff9a; background: #0a1f12; }
+    #level-badge.intermediate { border-color: #ffd60055; color: #ffd600; background: #1a1500; }
+    #level-badge.advanced  { border-color: #ff555555; color: #ff8888; background: #1f0a0a; }
+
+    /* レベル選択セレクト */
+    #level-select {
+      padding: 5px 10px;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #e8e8e8;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+
+    /* スプレッドシート読み込みステータス */
+    #sheet-status {
+      font-size: 0.75rem;
+      color: #555;
+      text-align: right;
+      margin-top: 3px;
+    }
+    #sheet-status.ok  { color: #4dff9a66; }
+    #sheet-status.err { color: #ff555566; }
+
     /* 誤字ヒートマップ */
     #heatmap-row {
       display: flex;
@@ -213,6 +252,13 @@
     <label>名前：</label>
     <input type="text" id="userNameInput" placeholder="ユーザー名を入力" maxlength="30">
   </div>
+  <select id="level-select" title="レベルを手動で選択">
+    <option value="auto">🔄 自動（WPM判定）</option>
+    <option value="beginner">🌱 初級（〜29 WPM）</option>
+    <option value="intermediate">⚡ 中級（30〜59 WPM）</option>
+    <option value="advanced">🔥 上級（60 WPM〜）</option>
+  </select>
+  <span id="level-badge">— レベル未定 —</span>
   <button id="newPromptBtn">📝 新しい課題文</button>
   <button id="genAdviceBtn" disabled class="primary">🤖 AI分析・記録</button>
   <button id="resetBtn">↺ リセット</button>
@@ -235,10 +281,14 @@
 
     <!-- 課題文パネル -->
     <div class="panel">
-      <div class="panel-title">練習文（日本語）</div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <div class="panel-title" style="margin-bottom:0;">練習文（日本語）</div>
+        <div id="prompt-level-label" style="font-size:0.72rem; color:#666;"></div>
+      </div>
       <div id="prompt-ja"></div>
       <div class="panel-title" style="margin-top:10px; color:#ffd60099;">ローマ字（入力対象）</div>
       <div id="prompt-romaji"></div>
+      <div id="sheet-status">📋 スプレッドシートを読み込み中…</div>
     </div>
 
     <!-- 入力エリア（ローマ字直接入力・IMEオフ） -->
@@ -559,31 +609,155 @@ function getExpectedAtPosition(segments, typed) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  練習文データ（日本語かな表記 + 表示用漢字かな混じり）
+//  WPM基準によるレベル定義
+//  初級: 〜29 WPM  中級: 30〜59 WPM  上級: 60 WPM〜
 // ═══════════════════════════════════════════════════════
-// 単文プール（末尾に「。」付き）
-const SENTENCE_POOL = [
-  { display:'私は毎日練習します。',           kana:'わたしはまいにちれんしゅうします。' },
-  { display:'今日はいい天気ですね。',          kana:'きょうはいいてんきですね。' },
-  { display:'指を正しく置きましょう。',        kana:'ゆびをただしくおきましょう。' },
-  { display:'手首をまっすぐに保ちます。',      kana:'てくびをまっすぐにたもちます。' },
-  { display:'こつこつと練習することが大切です。', kana:'こつこつとれんしゅうすることがたいせつです。' },
-  { display:'日本語のタイピングは難しいです。', kana:'にほんごのたいぴんぐはむずかしいです。' },
-  { display:'早く打つより正確さを意識します。', kana:'はやくうつよりせいかくさをいしきします。' },
-  { display:'毎日少しずつレベルを上げていきます。', kana:'まいにちすこしずつれべるをあげていきます。' },
-  { display:'ホームポジションから指を離しません。', kana:'ほーむぽじしょんからゆびをはなしません。' },
-  { display:'姿勢を正しくしてキーボードを打ちます。', kana:'しせいをただしくしてきーぼーどをうちます。' },
-  { display:'キーを見ないで入力できるように練習します。', kana:'きーをみないでにゅうりょくできるようにれんしゅうします。' },
-  { display:'小指もしっかり使うことが上達のコツです。', kana:'こゆびもしっかりつかうことがじょうたつのこつです。' },
-  { display:'タイピングの速度は正確さから生まれます。', kana:'たいぴんぐのそくどはせいかくさからうまれます。' },
-  { display:'画面を見ながら文字を入力します。', kana:'がめんをみながらもじをにゅうりょくします。' },
-  { display:'ゆっくり確認しながら打つと間違いが減ります。', kana:'ゆっくりかくにんしながらうつとまちがいがへります。' },
-  { display:'手首を浮かせると疲れにくくなります。', kana:'てくびをうかせるとつかれにくくなります。' },
-  { display:'呼吸を整えてからタイピングを始めます。', kana:'こきゅうをととのえてからたいぴんぐをはじめます。' },
-  { display:'日本語入力の練習は毎日続けましょう。', kana:'にほんごにゅうりょくのれんしゅうはまいにちつづけましょう。' },
-  { display:'正しいフォームが速さにつながります。', kana:'ただしいふぉーむがはやさにつながります。' },
-  { display:'肩の力を抜いてリラックスして打ちます。', kana:'かたのちからをぬいてりらっくすしてうちます。' },
-];
+const LEVEL_THRESHOLDS = { beginner: 30, intermediate: 60 };
+
+function wpmToLevel(wpm) {
+  if (wpm < LEVEL_THRESHOLDS.beginner)    return 'beginner';
+  if (wpm < LEVEL_THRESHOLDS.intermediate) return 'intermediate';
+  return 'advanced';
+}
+
+const LEVEL_LABELS = {
+  beginner:     { text: '🌱 初級（〜29 WPM）',   cls: 'beginner' },
+  intermediate: { text: '⚡ 中級（30〜59 WPM）', cls: 'intermediate' },
+  advanced:     { text: '🔥 上級（60 WPM〜）',   cls: 'advanced' },
+};
+
+// ── 問題文プール（フォールバック用ローカルデータ）──
+// Googleスプレッドシートから読み込めない場合に使用
+const SENTENCE_POOL_LOCAL = {
+  beginner: [
+    { display:'今日はいい天気です。',           kana:'きょうはいいてんきです。' },
+    { display:'私は学生です。',                 kana:'わたしはがくせいです。' },
+    { display:'猫が好きです。',                 kana:'ねこがすきです。' },
+    { display:'ご飯を食べます。',               kana:'ごはんをたべます。' },
+    { display:'水を飲みます。',                 kana:'みずをのみます。' },
+    { display:'本を読みます。',                 kana:'ほんをよみます。' },
+    { display:'家に帰ります。',                 kana:'いえにかえります。' },
+    { display:'音楽を聴きます。',               kana:'おんがくをききます。' },
+    { display:'映画を見ます。',                 kana:'えいがをみます。' },
+    { display:'友達と話します。',               kana:'ともだちとはなします。' },
+    { display:'朝ご飯はパンです。',             kana:'あさごはんはぱんです。' },
+    { display:'犬が走ります。',                 kana:'いぬがはしります。' },
+    { display:'花がきれいです。',               kana:'はながきれいです。' },
+    { display:'空が青いです。',                 kana:'そらがあおいです。' },
+    { display:'電車に乗ります。',               kana:'でんしゃにのります。' },
+  ],
+  intermediate: [
+    { display:'私は毎日練習します。',             kana:'わたしはまいにちれんしゅうします。' },
+    { display:'指を正しく置きましょう。',          kana:'ゆびをただしくおきましょう。' },
+    { display:'手首をまっすぐに保ちます。',        kana:'てくびをまっすぐにたもちます。' },
+    { display:'日本語のタイピングは難しいです。',  kana:'にほんごのたいぴんぐはむずかしいです。' },
+    { display:'早く打つより正確さを意識します。',  kana:'はやくうつよりせいかくさをいしきします。' },
+    { display:'画面を見ながら文字を入力します。',  kana:'がめんをみながらもじをにゅうりょくします。' },
+    { display:'手首を浮かせると疲れにくくなります。', kana:'てくびをうかせるとつかれにくくなります。' },
+    { display:'正しいフォームが速さにつながります。', kana:'ただしいふぉーむがはやさにつながります。' },
+    { display:'肩の力を抜いてリラックスして打ちます。', kana:'かたのちからをぬいてりらっくすしてうちます。' },
+    { display:'タイピングの速度は正確さから生まれます。', kana:'たいぴんぐのそくどはせいかくさからうまれます。' },
+    { display:'呼吸を整えてからタイピングを始めます。',  kana:'こきゅうをととのえてからたいぴんぐをはじめます。' },
+    { display:'日本語入力の練習は毎日続けましょう。',    kana:'にほんごにゅうりょくのれんしゅうはまいにちつづけましょう。' },
+    { display:'ゆっくり確認しながら打つと間違いが減ります。', kana:'ゆっくりかくにんしながらうつとまちがいがへります。' },
+    { display:'こつこつと練習することが大切です。',      kana:'こつこつとれんしゅうすることがたいせつです。' },
+    { display:'毎日少しずつレベルを上げていきます。',    kana:'まいにちすこしずつれべるをあげていきます。' },
+  ],
+  advanced: [
+    { display:'ホームポジションから指を離しません。',          kana:'ほーむぽじしょんからゆびをはなしません。' },
+    { display:'姿勢を正しくしてキーボードを打ちます。',        kana:'しせいをただしくしてきーぼーどをうちます。' },
+    { display:'キーを見ないで入力できるように練習します。',    kana:'きーをみないでにゅうりょくできるようにれんしゅうします。' },
+    { display:'小指もしっかり使うことが上達のコツです。',      kana:'こゆびもしっかりつかうことがじょうたつのこつです。' },
+    { display:'情報処理技術者試験の合格を目指して勉強します。',kana:'じょうほうしょりぎじゅつしゃしけんのごうかくをめざしてべんきょうします。' },
+    { display:'コンピューターの基礎知識を身に付けることが重要です。', kana:'こんぴゅーたーのきそちしきをみにつけることがじゅうようです。' },
+    { display:'データを正確に素早く入力する能力が求められます。',     kana:'でーたをせいかくにすばやくにゅうりょくするのうりょくがもとめられます。' },
+    { display:'医療事務の仕事ではタイピングスキルが必要不可欠です。', kana:'いりょうじむのしごとではたいぴんぐすきるがひつようふかけつです。' },
+    { display:'ブラインドタッチをマスターすると作業効率が大幅に上がります。', kana:'ぶらいんどたっちをますたーするとさぎょうこうりつがおおはばにあがります。' },
+    { display:'スプレッドシートに素早くデータを入力できるようになりましょう。', kana:'すぷれっどしーとにすばやくでーたをにゅうりょくできるようになりましょう。' },
+    { display:'キーボードを見ずに正確に文章を打ち込む練習を繰り返します。',   kana:'きーぼーどをみずにせいかくにぶんしょうをうちこむれんしゅうをくりかえします。' },
+    { display:'タイピング速度が上がると仕事のクオリティも向上します。',       kana:'たいぴんぐそくどがあがるとしごとのくおりてぃもこうじょうします。' },
+  ],
+};
+
+// ── アクティブな問題文プール（スプレッドシート読み込み後に上書き）──
+let SENTENCE_POOL = {
+  beginner:     [...SENTENCE_POOL_LOCAL.beginner],
+  intermediate: [...SENTENCE_POOL_LOCAL.intermediate],
+  advanced:     [...SENTENCE_POOL_LOCAL.advanced],
+};
+
+// ── スプレッドシート読み込み設定 ──
+// GASウェブアプリのURL（問題文読み込み専用エンドポイント）
+// GASコードのdoGet()がスプレッドシートのデータをJSONで返すように設定してください。
+// 詳細は gas_sentences.gs を参照してください。
+const GAS_SENTENCES_URL = ""; // ← 問題文読み込み用GASウェブアプリのURLをここに貼り付け
+
+const sheetStatusEl = document.getElementById("sheet-status");
+
+async function loadSentencesFromSheet() {
+  if (!GAS_SENTENCES_URL) {
+    sheetStatusEl.textContent = "📋 GAS URLが未設定のため、ローカルデータを使用中";
+    sheetStatusEl.className = "";
+    return;
+  }
+  sheetStatusEl.textContent = "📋 スプレッドシートを読み込み中…";
+  sheetStatusEl.className = "";
+  try {
+    const res = await fetch(GAS_SENTENCES_URL);
+    const json = await res.json();
+    // 期待するJSON形式:
+    // { beginner: [{display:"...", kana:"..."},...], intermediate:[...], advanced:[...] }
+    let loaded = 0;
+    ['beginner','intermediate','advanced'].forEach(lv => {
+      if (json[lv] && Array.isArray(json[lv]) && json[lv].length > 0) {
+        SENTENCE_POOL[lv] = json[lv];
+        loaded += json[lv].length;
+      }
+    });
+    sheetStatusEl.textContent = `✅ スプレッドシートから ${loaded} 件の問題文を読み込みました`;
+    sheetStatusEl.className = "ok";
+  } catch (e) {
+    sheetStatusEl.textContent = `⚠️ スプレッドシート読み込み失敗（ローカルデータを使用中）`;
+    sheetStatusEl.className = "err";
+  }
+}
+
+// ── レベル管理 ──
+let currentLevel = 'beginner';  // 初期値：初級
+let lastWpm = 0;
+let manualLevel = 'auto';  // 'auto' or levelKey
+
+const levelBadgeEl     = document.getElementById("level-badge");
+const levelSelectEl    = document.getElementById("level-select");
+const promptLevelLabel = document.getElementById("prompt-level-label");
+
+levelSelectEl.addEventListener("change", () => {
+  manualLevel = levelSelectEl.value;
+  if (manualLevel !== 'auto') {
+    currentLevel = manualLevel;
+    updateLevelBadge(currentLevel);
+  }
+});
+
+function updateLevelBadge(level) {
+  const info = LEVEL_LABELS[level];
+  if (!info) return;
+  levelBadgeEl.textContent = info.text;
+  levelBadgeEl.className   = info.cls;
+  promptLevelLabel.textContent = info.text;
+  promptLevelLabel.style.color =
+    level === 'beginner' ? '#4dff9a88' :
+    level === 'intermediate' ? '#ffd60088' : '#ff888888';
+}
+
+function autoUpdateLevel(wpm) {
+  if (manualLevel !== 'auto') return;
+  const newLevel = wpmToLevel(wpm);
+  if (newLevel !== currentLevel) {
+    currentLevel = newLevel;
+    updateLevelBadge(currentLevel);
+  }
+}
 
 let currentPromptObj = null;  // { display, kana } — 4文連結済み
 let currentRomaji    = "";    // 入力対象のローマ字文字列（4文分）
@@ -591,9 +765,9 @@ let typingStartTime  = null;
 let typingFinished   = false;
 let missedKeys       = {};    // ミスしたローマ字キー集計
 
-// プールからn文をランダムに選んで重複なしで返す
+// プールからn文をランダムに選んで重複なしで返す（レベル対応）
 function sampleSentences(n) {
-  const pool = [...SENTENCE_POOL];
+  const pool = [...(SENTENCE_POOL[currentLevel] || SENTENCE_POOL_LOCAL.beginner)];
   const result = [];
   for (let i = 0; i < n && pool.length > 0; i++) {
     const idx = Math.floor(Math.random() * pool.length);
@@ -603,6 +777,7 @@ function sampleSentences(n) {
 }
 
 function pickPrompt() {
+  updateLevelBadge(currentLevel);
   const sentences = sampleSentences(4);
   // 4文を連結（日本語表示・かな）
   currentPromptObj = {
@@ -713,6 +888,13 @@ typingInput.addEventListener("input", e => {
     typingFinished = true;
     typingInput.disabled = true;
     if (calibDone) genBtn.disabled = false;
+    // WPMを確定してレベルを自動更新
+    if (typingStartTime) {
+      const elapsed = (Date.now() - typingStartTime) / 60000;
+      const finalWpm = Math.round((typed.length / 5) / elapsed);
+      lastWpm = finalWpm;
+      autoUpdateLevel(finalWpm);
+    }
   }
 });
 
@@ -727,6 +909,13 @@ typingInput.addEventListener("keydown", e => {
       renderRomaji(typingInput.value);
       updateStats(typingInput.value);
       updateHeatmap();
+      // WPMを確定してレベルを自動更新
+      if (typingStartTime) {
+        const elapsed = (Date.now() - typingStartTime) / 60000;
+        const finalWpm = Math.round((typingInput.value.length / 5) / elapsed);
+        lastWpm = finalWpm;
+        autoUpdateLevel(finalWpm);
+      }
     }
   }
 });
@@ -961,6 +1150,7 @@ ${postureIssues.length > 0
       postureIssues: postureIssues.join("、") || "問題なし",
       homeRate:      homeRate,
       score:         score,
+      level:         currentLevel,
     };
 
     // ── GASウェブアプリのURLをここに貼り付けてください ──
@@ -1204,11 +1394,13 @@ camera.start()
     canvas.width=640; canvas.height=480;
     canvas.classList.add("calibrating");
     statusEl.textContent="Q（左上）をクリック (0/4)";
-    pickPrompt(); // 最初の課題文を表示
+    updateLevelBadge(currentLevel);
+    loadSentencesFromSheet().then(() => pickPrompt());
   })
   .catch(err=>{
     statusEl.textContent=`⚠️ カメラエラー: ${err.message}`;
-    pickPrompt();
+    updateLevelBadge(currentLevel);
+    loadSentencesFromSheet().then(() => pickPrompt());
   });
 </script>
 </body>
