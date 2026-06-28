@@ -1204,8 +1204,7 @@ genBtn.addEventListener("click", async () => {
   const expected = getExpectedAtPosition(currentSegments, typed);
   for(let i=0;i<done;i++) if(typed[i]!==(expected[i]??target[i])) errors++;
   const accuracy = done===0?0:Math.round((1-errors/done)*100);
-  const elapsed  = typingStartTime ? (Date.now()-typingStartTime)/60000 : 1;
-  const wpm      = done===0?0:Math.round((done/5)/elapsed);
+  const wpm      = lastWpm > 0 ? lastWpm : (typingStartTime ? Math.round((done/5)/((Date.now()-typingStartTime)/60000)) : 0);
   const missedKeysSorted = Object.entries(missedKeys).sort((a,b)=>b[1]-a[1]).slice(0,6);
 
   genBtn.disabled = true;
