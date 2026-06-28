@@ -6,6 +6,10 @@
   <title>AI タイピング診断</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
     body {
       background: #111;
       color: #e8e8e8;
@@ -13,11 +17,13 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 12px;
-      padding: 14px;
+      gap: 8px;
+      padding: 10px 14px;
+      height: 100vh;
+      overflow: hidden;
     }
 
-    h1 { font-size: 1rem; color: #aaa; letter-spacing: 0.15em; text-transform: uppercase; }
+    h1 { font-size: 1rem; color: #aaa; letter-spacing: 0.15em; text-transform: uppercase; flex-shrink: 0; }
 
     /* ── レイアウト: カメラ + タイピングパネルを横並び ── */
     #main-layout {
@@ -25,29 +31,57 @@
       gap: 14px;
       width: 100%;
       max-width: 1060px;
-      align-items: flex-start;
-      flex-wrap: wrap;
+      align-items: stretch;
+      flex-wrap: nowrap;
+      flex: 1 1 0;
+      min-height: 0;
+      overflow: hidden;
     }
 
     /* ── カメラ側 ── */
-    #cam-section { flex: 0 0 auto; }
+    #cam-section {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      overflow: hidden;
+      min-width: 0;
+    }
     #canvas {
       display: block;
       cursor: crosshair;
       border: 1px solid #333;
       border-radius: 6px;
       max-width: 100%;
+      max-height: calc(100vh - 140px);
+      object-fit: contain;
     }
     #canvas.calibrating { border-color: #ffd600; box-shadow: 0 0 0 2px #ffd60033; }
     #status { text-align: center; font-size: 0.82rem; color: #ffd600; margin-top: 5px; }
 
     /* ── タイピングパネル ── */
+    /* 右カラム: 問題文パネルのみ、スクロール可能 */
     #typing-section {
       flex: 1 1 340px;
       display: flex;
       flex-direction: column;
       gap: 10px;
       min-width: 300px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 4px;
+    }
+    #typing-section::-webkit-scrollbar { width: 5px; }
+    #typing-section::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 3px; }
+    #typing-section::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+    #typing-section::-webkit-scrollbar-thumb:hover { background: #555; }
+
+    /* 入力エリア（カメラ下に移動） */
+    #input-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 8px;
     }
 
     .panel {
@@ -102,21 +136,23 @@
     /* 入力エリア */
     #typing-input {
       width: 100%;
-      padding: 9px 12px;
+      padding: 12px 14px;
       background: #0e0e0e;
       border: 1px solid #333;
       border-radius: 6px;
       color: #e8e8e8;
       font-family: 'Courier New', monospace;
-      font-size: 0.95rem;
+      font-size: 1.1rem;
+      line-height: 1.7;
       resize: none;
       outline: none;
       caret-color: #ffd600;
-      ime-mode: disabled;        /* IE/旧Edge向け */
+      ime-mode: disabled;
       -webkit-ime-mode: disabled;
+      min-height: 80px;
     }
-    #typing-input:focus { border-color: #ffd60066; }
-    #typing-input:disabled { opacity: 0.4; }
+    #typing-input:focus { border-color: #ffd60066; box-shadow: 0 0 0 2px #ffd60011; }
+    #typing-input:disabled { opacity: 0.4; cursor: default; }
 
     /* 統計バー */
     #stats-row {
@@ -142,6 +178,7 @@
       align-items: center;
       width: 100%;
       max-width: 1060px;
+      flex-shrink: 0;
     }
     #api-key-wrap { display: flex; gap: 6px; align-items: center; font-size: 0.82rem; flex: 1; min-width: 200px; }
     #api-key-wrap input {
@@ -241,6 +278,15 @@
     }
 
     video { display: none; }
+
+    /* 問題文パネル: カーソルが端に来てもスクロール余白を確保 */
+    #prompt-panel { scroll-margin: 20px; }
+
+    /* 入力セクション全体 */
+    #input-section { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+    /* canvasをwidth:100%に（カメラ下の入力欄と幅を揃える） */
+    #canvas { width: 100%; }
   </style>
 </head>
 <body>
@@ -266,7 +312,7 @@
 
 <div id="main-layout">
 
-  <!-- カメラ側 -->
+  <!-- 左カラム: カメラ＋入力エリア -->
   <div id="cam-section">
     <div id="info" style="text-align:center; font-size:0.8rem; color:#666; margin-bottom:6px;">
       ① Q→P→Z→？→ ② F → ③ J の順にクリック
@@ -274,13 +320,43 @@
     <video id="cam" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
     <div id="status">カメラ起動中…</div>
+
+    <!-- 入力エリア（カメラ下） -->
+    <div id="input-section">
+      <textarea
+        id="typing-input"
+        rows="3"
+        placeholder="ローマ字で直接入力（IMEオフ）― Enter で完了"
+        disabled
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        inputmode="none"
+        lang="en"
+      ></textarea>
+
+      <!-- 統計 -->
+      <div id="stats-row">
+        <div class="stat-chip">正確率 <span id="acc-val">—</span></div>
+        <div class="stat-chip">WPM <span id="wpm-val">—</span></div>
+        <div class="stat-chip">誤字数 <span id="err-val">—</span></div>
+        <div class="stat-chip">進捗 <span id="prog-val">—</span></div>
+      </div>
+
+      <!-- 誤字キー -->
+      <div class="panel" id="heatmap-panel" style="display:none;">
+        <div class="panel-title">よく間違えるキー</div>
+        <div id="heatmap-row"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- タイピング側 -->
+  <!-- 右カラム: 問題文＋アドバイス（スクロール可能） -->
   <div id="typing-section">
 
     <!-- 課題文パネル -->
-    <div class="panel">
+    <div class="panel" id="prompt-panel">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
         <div class="panel-title" style="margin-bottom:0;">練習文（日本語）</div>
         <div id="prompt-level-label" style="font-size:0.72rem; color:#666;"></div>
@@ -289,34 +365,6 @@
       <div class="panel-title" style="margin-top:10px; color:#ffd60099;">ローマ字（入力対象）</div>
       <div id="prompt-romaji"></div>
       <div id="sheet-status">📋 スプレッドシートを読み込み中…</div>
-    </div>
-
-    <!-- 入力エリア（ローマ字直接入力・IMEオフ） -->
-    <textarea
-      id="typing-input"
-      rows="2"
-      placeholder="ローマ字で直接入力してください（IMEオフ）―Enter で完了"
-      disabled
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck="false"
-      inputmode="none"
-      lang="en"
-    ></textarea>
-
-    <!-- 統計 -->
-    <div id="stats-row">
-      <div class="stat-chip">正確率 <span id="acc-val">—</span></div>
-      <div class="stat-chip">WPM <span id="wpm-val">—</span></div>
-      <div class="stat-chip">誤字数 <span id="err-val">—</span></div>
-      <div class="stat-chip">進捗 <span id="prog-val">—</span></div>
-    </div>
-
-    <!-- 誤字キー -->
-    <div class="panel" id="heatmap-panel" style="display:none;">
-      <div class="panel-title">よく間違えるキー</div>
-      <div id="heatmap-row"></div>
     </div>
 
     <!-- アドバイス -->
@@ -808,12 +856,26 @@ function renderRomaji(typed) {
     return;
   }
   const { charStates, displayTarget } = matchTypedToSegments(currentSegments, typed);
+  const cursorPos = typed.length; // カーソル位置（次に入力すべき文字のindex）
   promptRmEl.innerHTML = displayTarget.split("").map((ch, i) => {
-    const cls = charStates[i] || "pending";
+    let cls = charStates[i] || "pending";
+    const isCursor = (i === cursorPos);
     // スペースは ＿ で表示
     const safe = ch === " " ? "＿" : ch.replace(/&/g,"&amp;").replace(/</g,"&lt;");
-    return `<span class="char ${cls}">${safe}</span>`;
+    return `<span class="char ${cls}${isCursor ? ' cursor' : ''}">${safe}</span>`;
   }).join("");
+
+  // カーソル位置（次の文字）が見える位置に右パネルをスクロール
+  const cursorEl = promptRmEl.querySelector('.cursor');
+  if (cursorEl) {
+    const panel = document.getElementById('typing-section');
+    const panelRect  = panel.getBoundingClientRect();
+    const cursorRect = cursorEl.getBoundingClientRect();
+    // カーソルが右パネルの表示領域下70%に来たらスクロール
+    if (cursorRect.bottom > panelRect.bottom - 40 || cursorRect.top < panelRect.top + 40) {
+      cursorEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
 }
 
 function updateStats(typed) {
