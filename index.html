@@ -7,8 +7,9 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
-      height: 100%;
-      overflow: hidden;
+      /* ページ全体スクロールを許可 */
+      height: auto;
+      overflow: auto;
     }
     body {
       background: #111;
@@ -19,64 +20,78 @@
       align-items: center;
       gap: 8px;
       padding: 10px 14px;
-      height: 100vh;
-      overflow: hidden;
+      min-height: 100vh;
     }
 
     h1 { font-size: 1rem; color: #aaa; letter-spacing: 0.15em; text-transform: uppercase; flex-shrink: 0; }
 
-    /* ── レイアウト: カメラ + タイピングパネルを横並び ── */
+    /* ── コントロールバーを画面上部に固定 ── */
+    #controls {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: #111;
+      padding: 6px 0;
+      border-bottom: 1px solid #222;
+    }
+
+    /* ── メインレイアウト ── */
     #main-layout {
       display: flex;
       gap: 14px;
       width: 100%;
       max-width: 1060px;
-      align-items: stretch;
+      align-items: flex-start;  /* 左右それぞれ自然な高さ */
       flex-wrap: nowrap;
-      flex: 1 1 0;
-      min-height: 0;
-      overflow: hidden;
     }
 
-    /* ── カメラ側 ── */
+    /* ── 左カラム: カメラ＋入力 を画面上部にstickyで固定 ── */
     #cam-section {
       flex: 0 0 auto;
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      overflow: hidden;
       min-width: 0;
+      position: sticky;
+      top: 52px;   /* controlsの高さ分だけ下げる */
+      max-height: calc(100vh - 62px);
+      overflow-y: auto;
+      overflow-x: hidden;
     }
+    #cam-section::-webkit-scrollbar { width: 4px; }
+    #cam-section::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
     #canvas {
       display: block;
       cursor: crosshair;
       border: 1px solid #333;
       border-radius: 6px;
-      max-width: 100%;
-      max-height: calc(100vh - 140px);
+      width: 100%;
+      max-height: 52vh;
       object-fit: contain;
     }
     #canvas.calibrating { border-color: #ffd600; box-shadow: 0 0 0 2px #ffd60033; }
     #status { text-align: center; font-size: 0.82rem; color: #ffd600; margin-top: 5px; }
 
-    /* ── タイピングパネル ── */
-    /* 右カラム: 問題文パネルのみ、スクロール可能 */
+    /* ── 右カラム: 問題文＋アドバイス（自然に縦伸び・ページスクロールで読む） ── */
     #typing-section {
       flex: 1 1 340px;
       display: flex;
       flex-direction: column;
       gap: 10px;
       min-width: 300px;
-      overflow-y: auto;
-      overflow-x: hidden;
-      padding-right: 4px;
     }
-    #typing-section::-webkit-scrollbar { width: 5px; }
-    #typing-section::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 3px; }
-    #typing-section::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-    #typing-section::-webkit-scrollbar-thumb:hover { background: #555; }
 
-    /* 入力エリア（カメラ下に移動） */
+    /* 問題文パネル: ページスクロール中も上部に固定 */
+    #prompt-panel {
+      position: sticky;
+      top: 52px;
+      z-index: 10;
+      background: #181818;
+      border-bottom: 1px solid #333;
+    }
+
+    /* 入力エリア（カメラ下） */
     #input-section {
       display: flex;
       flex-direction: column;
@@ -171,6 +186,7 @@
     .stat-chip span { color: #fff; font-weight: bold; }
 
     /* コントロール */
+    /* #controls は上部sticky定義に統合済み */
     #controls {
       display: flex;
       gap: 8px;
@@ -178,7 +194,6 @@
       align-items: center;
       width: 100%;
       max-width: 1060px;
-      flex-shrink: 0;
     }
     #api-key-wrap { display: flex; gap: 6px; align-items: center; font-size: 0.82rem; flex: 1; min-width: 200px; }
     #api-key-wrap input {
@@ -218,6 +233,7 @@
       white-space: pre-wrap;
       min-height: 60px;
       color: #ccc;
+      /* ページ全体スクロールで読むため max-height 制限なし */
     }
     #advice.loading { color: #666; animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.4 } }
@@ -856,24 +872,36 @@ function renderRomaji(typed) {
     return;
   }
   const { charStates, displayTarget } = matchTypedToSegments(currentSegments, typed);
-  const cursorPos = typed.length; // カーソル位置（次に入力すべき文字のindex）
+  const cursorPos = typed.length;
   promptRmEl.innerHTML = displayTarget.split("").map((ch, i) => {
-    let cls = charStates[i] || "pending";
+    const cls  = charStates[i] || "pending";
     const isCursor = (i === cursorPos);
-    // スペースは ＿ で表示
     const safe = ch === " " ? "＿" : ch.replace(/&/g,"&amp;").replace(/</g,"&lt;");
     return `<span class="char ${cls}${isCursor ? ' cursor' : ''}">${safe}</span>`;
   }).join("");
 
-  // カーソル位置（次の文字）が見える位置に右パネルをスクロール
+  // ── カーソルが見えるように #prompt-romaji コンテナのみスクロール ──
+  // scrollIntoView は使わない（パネル全体が動いて問題文が隠れるため）
   const cursorEl = promptRmEl.querySelector('.cursor');
   if (cursorEl) {
-    const panel = document.getElementById('typing-section');
-    const panelRect  = panel.getBoundingClientRect();
-    const cursorRect = cursorEl.getBoundingClientRect();
-    // カーソルが右パネルの表示領域下70%に来たらスクロール
-    if (cursorRect.bottom > panelRect.bottom - 40 || cursorRect.top < panelRect.top + 40) {
-      cursorEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // promptRmEl自体はoverflow:visibleなので、
+    // 親の #typing-section の scrollTop を操作する
+    const panel      = document.getElementById('typing-section');
+    const romajiTop  = promptRmEl.getBoundingClientRect().top;
+    const panelTop   = panel.getBoundingClientRect().top;
+    const cursorTop  = cursorEl.getBoundingClientRect().top;
+    const cursorBot  = cursorEl.getBoundingClientRect().bottom;
+    const panelBot   = panel.getBoundingClientRect().bottom;
+
+    // カーソルが下端から80px以内に入ったらスクロール（上端には動かさない）
+    if (cursorBot > panelBot - 80) {
+      const delta = cursorBot - (panelBot - 80);
+      panel.scrollTop += delta;
+    }
+    // カーソルが上に隠れた場合は戻す
+    if (cursorTop < panelTop + 10) {
+      const delta = panelTop + 10 - cursorTop;
+      panel.scrollTop -= delta;
     }
   }
 }
@@ -1279,6 +1307,8 @@ genBtn.addEventListener("click", async () => {
     });
     adviceBox.className = "";
     adviceBox.textContent = result;
+    // ページをアドバイス欄まで自動スクロール
+    adviceBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch(e) {
     adviceBox.className = "";
     adviceBox.textContent = `⚠️ エラー: ${e.message}`;
