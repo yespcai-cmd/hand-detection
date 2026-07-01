@@ -602,14 +602,21 @@ function alignDisplayToSegments(display, segments) {
     while (di < display.length && isKanjiChar(display[di])) di++;
     const runLen = di - runStart;
 
-    // 次のアンカー文字が kanaFull 上で現れる位置を探し、そこまでを漢字ランに割り当てる
-    // 漢字は最低でも1文字1かなを消費する前提のため、その最小消費分より後ろから探す。
-    // （そうしないと、次のアンカーと同じ文字が漢字自身の読みの中に
-    //   たまたま含まれている場合に、誤ってそこを区切りと認識してしまう）
+    // 漢字ランの直後にある「連続する非漢字（アンカー）区間」をまとめて取得し、
+    // その並び全体が一致する位置を探す。1文字だけの一致で判定すると、
+    // 「練習」の読み「れんしゅう」に含まれる「し」のように、漢字の読みの
+    // 内部にたまたま次の文字と同じかなが含まれる場合に誤判定してしまうため。
     let kanaRunEnd = kanaFull.length;
     if (di < display.length) {
-      const nextAnchor = normalizeKanaChar(display[di]);
-      const found = kanaFull.indexOf(nextAnchor, ki + runLen);
+      let anchorEnd = di;
+      while (anchorEnd < display.length && !isKanjiChar(display[anchorEnd])) anchorEnd++;
+      const anchorRun = display.slice(di, anchorEnd).split('').map(normalizeKanaChar).join('');
+
+      let found = -1;
+      // 万一フルマッチしない場合に備え、後ろから1文字ずつ削って再検索（保険）
+      for (let len = anchorRun.length; len >= 1 && found === -1; len--) {
+        found = kanaFull.indexOf(anchorRun.slice(0, len), ki + runLen);
+      }
       if (found !== -1) kanaRunEnd = found;
     }
     const kanaRunLen = Math.max(kanaRunEnd - ki, runLen);
