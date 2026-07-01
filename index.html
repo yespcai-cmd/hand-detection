@@ -123,6 +123,28 @@
       margin-bottom: 6px;
     }
 
+    /* 課題文（日本語）の進捗別カラー（漢字1文字＝1単位でピンポイント表示） */
+    #prompt-ja .pj { transition: color 0.15s, background 0.15s; position: relative; }
+    #prompt-ja .pj.pending { color: #e8e8e8; }
+    #prompt-ja .pj.done    { color: #4dff9a; }
+    #prompt-ja .pj.current { color: #ffe680; }
+    #prompt-ja .pj.current::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0; bottom: -2px;
+      height: 2px;
+      background: #ffd600;
+      animation: blink 0.9s step-end infinite;
+    }
+    /* ミスした文字（漢字なら単位ごと）をピンポイントで赤く強調 */
+    #prompt-ja .pj.wrong {
+      color: #ff5555;
+      background: #3a1010;
+      border-radius: 2px;
+      font-weight: bold;
+    }
+    #prompt-ja .pj-sep { color: #444; }
+
     /* ローマ字表記（参考） */
     #prompt-romaji {
       font-size: 1.25rem;
@@ -484,6 +506,7 @@ function kanaToRomajiSegments(text) {
   const segments = [];
   let i = 0;
   while (i < text.length) {
+    const startI = i;
     // ん の処理:
     //   母音(a/i/u/e/o)・y・n が続く場合 → nn 必須（alt なし）
     //   子音前・末尾             → n が primary、nn も許容
@@ -493,7 +516,9 @@ function kanaToRomajiSegments(text) {
       } else {
         segments.push({ primary: 'n', alts: ['nn'] });
       }
-      i++; continue;
+      i++;
+      segments[segments.length - 1].kanaChars = text.slice(startI, i);
+      continue;
     }
     if (text[i] === 'っ') {
       const two = text[i+1] ? text[i+1] + (text[i+2]||'') : '';
@@ -501,24 +526,103 @@ function kanaToRomajiSegments(text) {
       const nr = KANA_TO_ROMAN[two] || KANA_TO_ROMAN[one];
       const cons = nr ? nr[0] : 't';
       segments.push({ primary: cons, alts: [] });
-      i++; continue;
+      i++;
+      segments[segments.length - 1].kanaChars = text.slice(startI, i);
+      continue;
     }
     const two = text.slice(i, i+2);
     if (two.length === 2 && KANA_TO_ROMAN[two]) {
       const primary = KANA_TO_ROMAN[two];
       segments.push({ primary, alts: ROMAJI_ALTS[primary] || [] });
-      i += 2; continue;
+      i += 2;
+      segments[segments.length - 1].kanaChars = text.slice(startI, i);
+      continue;
     }
     const ch = text[i];
     const primary = KANA_TO_ROMAN[ch] !== undefined ? KANA_TO_ROMAN[ch] : ch;
     segments.push({ primary, alts: ROMAJI_ALTS[primary] || [] });
     i++;
+    segments[segments.length - 1].kanaChars = text.slice(startI, i);
   }
   return segments;
 }
 
 function kanaToRomaji(text) {
   return kanaToRomajiSegments(text).map(s => s.primary).join('');
+}
+
+// ── 表示文字列（漢字含む）→ セグメント範囲 の対応付け ──
+// 読み仮名データ（ふりがな）が無いため、漢字1文字が実際にどのかな文字に
+// 対応するかは厳密には分からない。そこで、
+//   ・ひらがな/カタカナ/記号など「読み＝そのままの文字」は直接1:1で対応させる
+//   ・漢字が連続する区間（ラン）は、次のアンカー文字が現れるまでの
+//     かな文字数を、そのランの漢字文字数で均等に割って割り当てる
+// というベストエフォートの推定で「その漢字が含む区間」を求める。
+function normalizeKanaChar(ch) {
+  const code = ch.codePointAt(0);
+  if (code >= 0x30A1 && code <= 0x30F6) return String.fromCodePoint(code - 0x60); // カタカナ→ひらがな
+  return ch;
+}
+function isKanjiChar(ch) {
+  return /[\u4E00-\u9FFF\u3005]/.test(ch);
+}
+
+// display: 表示文字列（漢字含む）, segments: kanaToRomajiSegments() の結果（同じ文のもの）
+// 戻り値: display と同じ長さの配列。各要素は { segStart, segEnd } (segments のローカル範囲, endは exclusive) か null
+function alignDisplayToSegments(display, segments) {
+  const kanaCharSegIdx = [];               // かな文字(1つ)ごとに、どのセグメントに属するか
+  segments.forEach((seg, si) => {
+    const len = (seg.kanaChars || '').length || 1;
+    for (let k = 0; k < len; k++) kanaCharSegIdx.push(si);
+  });
+  const kanaFull = segments.map(s => s.kanaChars || '').join('');
+
+  const ranges = new Array(display.length).fill(null);
+  let ki = 0, di = 0;
+  while (di < display.length) {
+    const ch = display[di];
+    if (!isKanjiChar(ch)) {
+      const norm = normalizeKanaChar(ch);
+      if (ki < kanaFull.length && kanaFull[ki] === norm) {
+        const segIdx = kanaCharSegIdx[ki];
+        ranges[di] = { segStart: segIdx, segEnd: segIdx + 1 };
+        ki++;
+      }
+      di++;
+      continue;
+    }
+    // 漢字ラン（連続する漢字）を集める
+    const runStart = di;
+    while (di < display.length && isKanjiChar(display[di])) di++;
+    const runLen = di - runStart;
+
+    // 次のアンカー文字が kanaFull 上で現れる位置を探し、そこまでを漢字ランに割り当てる
+    // 漢字は最低でも1文字1かなを消費する前提のため、その最小消費分より後ろから探す。
+    // （そうしないと、次のアンカーと同じ文字が漢字自身の読みの中に
+    //   たまたま含まれている場合に、誤ってそこを区切りと認識してしまう）
+    let kanaRunEnd = kanaFull.length;
+    if (di < display.length) {
+      const nextAnchor = normalizeKanaChar(display[di]);
+      const found = kanaFull.indexOf(nextAnchor, ki + runLen);
+      if (found !== -1) kanaRunEnd = found;
+    }
+    const kanaRunLen = Math.max(kanaRunEnd - ki, runLen);
+    const base = Math.floor(kanaRunLen / runLen);
+    let extra = kanaRunLen - base * runLen;
+    let cursor = ki;
+    for (let j = 0; j < runLen; j++) {
+      let take = base + (extra > 0 ? 1 : 0);
+      if (extra > 0) extra--;
+      if (take < 1) take = 1;
+      const segStart = cursor < kanaFull.length ? kanaCharSegIdx[cursor] : segments.length;
+      const endKanaIdx = Math.min(cursor + take, kanaFull.length);
+      const segEnd = endKanaIdx < kanaFull.length ? kanaCharSegIdx[endKanaIdx] : segments.length;
+      ranges[runStart + j] = { segStart, segEnd: Math.max(segEnd, segStart + 1) };
+      cursor += take;
+    }
+    ki = cursor;
+  }
+  return ranges;
 }
 
 // セグメントリストと typed から表示・判定情報を生成する
@@ -632,6 +736,7 @@ function matchTypedToSegments(segments, typed) {
     displayTarget: displayParts.join(''),
     charStates,
     totalLen: displayParts.join('').length,
+    resolved, // セグメントごとの状態（'correct' | 'wrong' | 'partial' | 'pending'）。文単位の進捗表示に使用。
   };
 }
 
@@ -848,15 +953,37 @@ function pickPrompt() {
     display: sentences.map(s => s.display).join('　'),  // 全角スペース区切り
     kana:    sentences.map(s => s.kana).join(''),        // 続けて変換
   };
-  currentRomaji    = kanaToRomaji(currentPromptObj.kana);
-  currentSegments  = kanaToRomajiSegments(currentPromptObj.kana);
+
+  // 文ごとにセグメント化し、課題文（日本語）側の各文字がどのセグメント範囲
+  // （＝ローマ字の何文字目〜何文字目）に対応するかを推定して記録する。
+  // これにより、入力ミスがあったセグメントを含む「漢字1文字（単位）」を
+  // ピンポイントで赤くできるようになる（読み仮名データが無いため、
+  // 漢字が連続する区間はかな文字数を均等割りするベストエフォートの推定）。
+  currentSegments = [];
+  promptCharMeta  = [];  // 表示文字列全体（4文＋区切り）と同じ長さの配列
+  sentences.forEach((s, idx) => {
+    if (idx > 0) promptCharMeta.push({ sep: true, ch: '　' });
+    const localSegments = kanaToRomajiSegments(s.kana);
+    const offset = currentSegments.length;
+    currentSegments = currentSegments.concat(localSegments);
+    const charRanges = alignDisplayToSegments(s.display, localSegments);
+    for (let ci = 0; ci < s.display.length; ci++) {
+      const r = charRanges[ci];
+      promptCharMeta.push({
+        ch: s.display[ci],
+        segStart: r ? offset + r.segStart : null,
+        segEnd:   r ? offset + r.segEnd   : null,
+      });
+    }
+  });
+
+  currentRomaji    = currentSegments.map(s => s.primary).join('');
   typingStartTime  = null;
   typingFinished   = false;
   missedKeys       = {};
   typingInput.value    = "";
   typingInput.disabled = false;
   typingInput.focus();
-  promptJaEl.textContent = currentPromptObj.display;
   renderRomaji("");
   updateStats("");
   heatmapPanel.style.display = "none";
@@ -864,14 +991,55 @@ function pickPrompt() {
 
 // セグメントをキャッシュ（currentRomaji が変わるたびに再生成）
 let currentSegments = [];
+// 課題文（日本語）の文字単位進捗表示用（pickPrompt() で構築）
+let promptCharMeta  = [];   // [{ ch, segStart, segEnd }] または [{ sep:true, ch:'　' }]
+
+// 課題文（日本語）を「漢字1文字（単位）」ごとにピンポイントで進捗カラー表示
+//   done    : その文字が担当するローマ字部分をすべて正しく入力済み（緑）
+//   wrong   : その文字が担当する部分でミスが発生した（赤）← ピンポイント表示
+//   current : 今まさに入力中（黄色アンダーライン）
+//   pending : まだ入力していない（グレー）
+function renderPromptJa(resolved) {
+  if (promptCharMeta.length === 0) {
+    promptJaEl.textContent = currentPromptObj ? currentPromptObj.display : "";
+    return;
+  }
+  const html = promptCharMeta.map(entry => {
+    if (entry.sep) return `<span class="pj-sep">${entry.ch}</span>`;
+
+    let cls = 'pending';
+    if (entry.segStart != null) {
+      let hasWrong = false, hasPartial = false, allCorrect = true, any = false;
+      for (let s = entry.segStart; s < entry.segEnd; s++) {
+        const r = resolved[s];
+        if (!r) continue;
+        any = true;
+        if (r.state === 'wrong')   hasWrong = true;
+        if (r.state === 'partial') hasPartial = true;
+        if (r.state !== 'correct') allCorrect = false;
+      }
+      if (hasWrong) cls = 'wrong';
+      else if (any && allCorrect) cls = 'done';
+      else if (hasPartial) cls = 'current';
+      else cls = 'pending';
+    }
+    const safe = entry.ch.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    return `<span class="pj ${cls}">${safe}</span>`;
+  });
+
+  promptJaEl.innerHTML = html.join('');
+}
+
 
 // ローマ字行をchar単位で色付けレンダリング
 function renderRomaji(typed) {
   if (currentSegments.length === 0) {
     promptRmEl.innerHTML = "";
+    renderPromptJa([]);
     return;
   }
-  const { charStates, displayTarget } = matchTypedToSegments(currentSegments, typed);
+  const { charStates, displayTarget, resolved } = matchTypedToSegments(currentSegments, typed);
+  renderPromptJa(resolved);
   const cursorPos = typed.length;
   promptRmEl.innerHTML = displayTarget.split("").map((ch, i) => {
     const cls  = charStates[i] || "pending";
