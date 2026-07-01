@@ -355,6 +355,10 @@
     <div id="info" style="text-align:center; font-size:0.8rem; color:#666; margin-bottom:6px;">
       ① Q→P→Z→？→ ② F → ③ J の順にクリック
     </div>
+    <label id="fj-calib-toggle" style="display:flex; align-items:center; justify-content:center; gap:6px; font-size:0.8rem; color:#999; margin-bottom:8px; cursor:pointer;">
+      <input type="checkbox" id="fjCalibCheckbox" checked>
+      F・Jのキャリブレーションをする
+    </label>
     <video id="cam" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
     <div id="status">カメラ起動中…</div>
@@ -430,6 +434,8 @@ const statusEl     = document.getElementById("status");
 const adviceBox    = document.getElementById("advice");
 const genBtn       = document.getElementById("genAdviceBtn");
 const resetBtn     = document.getElementById("resetBtn");
+const infoEl        = document.getElementById("info");
+const fjCalibCheckbox = document.getElementById("fjCalibCheckbox");
 const newPromptBtn = document.getElementById("newPromptBtn");
 const userNameInput = document.getElementById("userNameInput");
 const typingInput  = document.getElementById("typing-input");
@@ -1206,7 +1212,7 @@ function getCanvasXY(e) {
 }
 
 canvas.addEventListener("click", e => {
-  if (clickStep >= 6) return;
+  if (calibDone) return;
   const {x,y} = getCanvasXY(e);
 
   if (clickStep < 4) {
@@ -1215,25 +1221,44 @@ canvas.addEventListener("click", e => {
       statusEl.textContent = `${CORNER_LABELS[clickStep]} をクリック (${clickStep}/4)`;
     } else {
       generateKeyPositions();
-      statusEl.textContent = "F の位置をクリック (5/6)";
+      if (fjCalibCheckbox.checked) {
+        statusEl.textContent = "F の位置をクリック (5/6)";
+      } else {
+        // F・Jキャリブレーションをスキップし、キーボード配置から自動算出した位置のまま完了
+        finishCalibration();
+      }
     }
   } else if (clickStep === 4) {
     F_pos = {x,y};
     const f = keys.find(k=>k.key==="F"); if(f){f.x=x;f.y=y;}
     clickStep++;
     statusEl.textContent = "J の位置をクリック (6/6)";
-  } else {
+  } else if (clickStep === 5) {
     J_pos = {x,y};
     const j = keys.find(k=>k.key==="J"); if(j){j.x=x;j.y=y;}
     clickStep++;
-    calibDone = true;
-    canvas.classList.remove("calibrating");
-    statusEl.textContent = "✅ キャリブレーション完了";
-    // 課題文が終わっていればボタン有効
-    if (typingFinished) genBtn.disabled = false;
-    typingInput.disabled = false;
+    finishCalibration();
   }
 });
+
+// キャリブレーション完了処理（F・Jあり／スキップの両方から呼ばれる）
+function finishCalibration() {
+  calibDone = true;
+  canvas.classList.remove("calibrating");
+  statusEl.textContent = "✅ キャリブレーション完了";
+  // 課題文が終わっていればボタン有効
+  if (typingFinished) genBtn.disabled = false;
+  typingInput.disabled = false;
+}
+
+// チェックボックスの状態に応じて案内文を切り替え
+function updateCalibInfoText() {
+  infoEl.textContent = fjCalibCheckbox.checked
+    ? "① Q→P→Z→？→ ② F → ③ J の順にクリック"
+    : "① Q→P→Z→？ の順にクリック（F・Jのキャリブレーションはスキップします）";
+}
+fjCalibCheckbox.addEventListener("change", updateCalibInfoText);
+updateCalibInfoText();
 
 function generateKeyPositions() {
   const [Q,P,Z,Hq] = corners;
